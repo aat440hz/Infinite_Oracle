@@ -3,7 +3,13 @@ import time
 import random
 import threading
 import queue
-import pyttsx3  # Import pyttsx3 for TTS
+import pyttsx3
+import tempfile
+import os
+import platform
+import sounddevice as sd
+import soundfile as sf
+import subprocess  # For playing .wav files on Linux
 from requests.adapters import HTTPAdapter
 from requests.packages.urllib3.util.retry import Retry
 
@@ -25,19 +31,13 @@ FALLBACK_WISDOM = [
 ]
 
 def setup_session():
-    """Set up a requests session with retry logic for robust network handling."""
     session = requests.Session()
-    retry_strategy = Retry(
-        total=5,  # Retry 5 times
-        backoff_factor=0.5,  # Wait 0.5s, 1s, 2s, 4s, 8s
-        status_forcelist=[500, 502, 503, 504],
-    )
+    retry_strategy = Retry(total=5, backoff_factor=0.5, status_forcelist=[500, 502, 503, 504])
     adapter = HTTPAdapter(max_retries=retry_strategy)
     session.mount("http://", adapter)
     return session
 
 def generate_wisdom(session, wisdom_queue):
-    """Generate a piece of wisdom from Ollama or fallback pool and add it to the queue."""
     payload = {"model": MODEL, "prompt": SYSTEM_PROMPT, "stream": False}
     try:
         response = session.post(OLLAMA_URL, json=payload, timeout=40)
@@ -50,53 +50,57 @@ def generate_wisdom(session, wisdom_queue):
         wisdom_queue.put(random.choice(FALLBACK_WISDOM))
 
 def wisdom_generator(session, wisdom_queue):
-    """Continuously generate wisdom in the background."""
     while True:
         generate_wisdom(session, wisdom_queue)
-        time.sleep(1)  # Small delay to avoid overwhelming Ollama
+        time.sleep(1)
 
 def speak_wisdom(paragraph, engine):
-    """Convert a paragraph of wisdom to speech using pyttsx3 and play it."""
     try:
         sentences = [s.strip() for s in paragraph.split('.') if s.strip()]
         for sentence in sentences:
-            engine.say(sentence + '.')  # Queue the sentence to be spoken
-            engine.runAndWait()  # Wait for the speech to finish before continuing
-            time.sleep(0.5)  # Pause between sentences for a natural rhythm
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.wav') as temp_wav_file:
+                temp_wav_path = temp_wav_file.name
+
+            engine.save_to_file(sentence + '.', temp_wav_path)
+            engine.runAndWait()
+
+            if platform.system() == "Windows":
+                data, samplerate = sf.read(temp_wav_path)
+                sd.play(data, samplerate)
+                sd.wait()
+            else:
+                subprocess.run(['aplay', temp_wav_path], check=True)
+
+            os.remove(temp_wav_path)
+
+            time.sleep(0.5)  # Pause between sentences for natural rhythm
     except Exception as e:
         print(f"Speech error: {e}")
 
 def main():
-    """Main loop to run the Infinite Oracle."""
     print("The Infinite Oracle awakens...")
     session = setup_session()
-    wisdom_queue = queue.Queue(maxsize=10)  # Buffer up to 10 paragraphs
+    wisdom_queue = queue.Queue(maxsize=10)
 
-    # Initialize pyttsx3 engine once
     engine = pyttsx3.init()
-
-    # Set voice to a low male voice (e.g., Microsoft David or similar)
     voices = engine.getProperty('voices')
     for voice in voices:
         if 'David' in voice.name:  # Microsoft David is a common low male voice
             engine.setProperty('voice', voice.id)
             break
 
-    # Set the speaking rate (optional, slower for more clear speech)
-    engine.setProperty('rate', 150)  # Lower value means slower speech
+    engine.setProperty('rate', 150)
 
-    # Start background wisdom generation
     generator_thread = threading.Thread(target=wisdom_generator, args=(session, wisdom_queue), daemon=True)
     generator_thread.start()
 
-    # Preload initial wisdom
-    for _ in range(3):  # Start with 3 paragraphs
+    for _ in range(3):
         generate_wisdom(session, wisdom_queue)
         time.sleep(1)
 
     while True:
         try:
-            wisdom = wisdom_queue.get(timeout=5)  # Wait up to 5s if queue is empty
+            wisdom = wisdom_queue.get(timeout=5)
             print(f"Oracle says: {wisdom}")
             speak_wisdom(wisdom, engine)
             wisdom_queue.task_done()
