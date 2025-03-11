@@ -7,7 +7,7 @@ The **Infinite Oracle** is a mystical wisdom generator that uses the Ollama mode
 - **Wisdom Generation**: The Infinite Oracle generates thought-provoking, cryptic, and motivational wisdom using the Ollama model (Llama 3.2).
 - **Text-to-Speech**: The wisdom is converted into speech using:
   - **Linux**: Flite's `kal` voice
-  - **Windows**: Built-in Windows TTS for a deep male voice
+  - **Windows**: Built-in Windows TTS for a deep male voice with improved playback using `sounddevice` and `soundfile`
 - **Background Operation**: The script continuously generates new wisdom in the background and speaks it aloud.
 
 ## Prerequisites
@@ -48,13 +48,13 @@ python infinite_oracle.py
 2. **Install Required Libraries:**
 
 ```powershell
-pip install requests pyttsx3
+pip install requests pyttsx3 sounddevice soundfile
 ```
 
 3. **Start the Infinite Oracle:**
 
 ```powershell
-python infinite_oracle-windows.py
+python infinite_oracle.py
 ```
 
 ### **Configure the Script**
@@ -67,4 +67,3 @@ If you want to modify the wisdom generation prompt, TTS voice, or model URL, you
 ## License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
