@@ -55,26 +55,14 @@ def wisdom_generator(session, wisdom_queue):
         generate_wisdom(session, wisdom_queue)
         time.sleep(1)  # Small delay to avoid overwhelming Ollama
 
-def speak_wisdom(paragraph):
-    """Convert a paragraph of wisdom to speech using the built-in Windows TTS engine."""
+def speak_wisdom(paragraph, engine):
+    """Convert a paragraph of wisdom to speech using pyttsx3 and play it."""
     try:
-        engine = pyttsx3.init()  # Initialize the TTS engine
-        
-        # Set voice to a low male voice (Microsoft David or similar)
-        voices = engine.getProperty('voices')
-        for voice in voices:
-            if 'David' in voice.name:  # "David" is a common low male voice in Windows
-                engine.setProperty('voice', voice.id)
-                break
-
-        # Set the speaking rate (optional, slower for more clear speech)
-        engine.setProperty('rate', 150)  # Lower value means slower speech
-
-        # Speak each sentence
         sentences = [s.strip() for s in paragraph.split('.') if s.strip()]
         for sentence in sentences:
             engine.say(sentence + '.')  # Queue the sentence to be spoken
             engine.runAndWait()  # Wait for the speech to finish before continuing
+            time.sleep(0.5)  # Pause between sentences for a natural rhythm
     except Exception as e:
         print(f"Speech error: {e}")
 
@@ -83,6 +71,19 @@ def main():
     print("The Infinite Oracle awakens...")
     session = setup_session()
     wisdom_queue = queue.Queue(maxsize=10)  # Buffer up to 10 paragraphs
+
+    # Initialize pyttsx3 engine once
+    engine = pyttsx3.init()
+
+    # Set voice to a low male voice (e.g., Microsoft David or similar)
+    voices = engine.getProperty('voices')
+    for voice in voices:
+        if 'David' in voice.name:  # Microsoft David is a common low male voice
+            engine.setProperty('voice', voice.id)
+            break
+
+    # Set the speaking rate (optional, slower for more clear speech)
+    engine.setProperty('rate', 150)  # Lower value means slower speech
 
     # Start background wisdom generation
     generator_thread = threading.Thread(target=wisdom_generator, args=(session, wisdom_queue), daemon=True)
@@ -97,13 +98,13 @@ def main():
         try:
             wisdom = wisdom_queue.get(timeout=5)  # Wait up to 5s if queue is empty
             print(f"Oracle says: {wisdom}")
-            speak_wisdom(wisdom)
+            speak_wisdom(wisdom, engine)
             wisdom_queue.task_done()
         except queue.Empty:
             print("Queue empty, using fallback...")
             wisdom = random.choice(FALLBACK_WISDOM)
             print(f"Oracle says: {wisdom}")
-            speak_wisdom(wisdom)
+            speak_wisdom(wisdom, engine)
 
 if __name__ == "__main__":
     try:
