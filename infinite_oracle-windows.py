@@ -3,7 +3,6 @@ import time
 import random
 import threading
 import queue
-import pyttsx3
 import tempfile
 import os
 import platform
@@ -16,23 +15,20 @@ from requests.adapters import HTTPAdapter
 from requests.packages.urllib3.util.retry import Retry
 
 # Ollama server details
-OLLAMA_URL = "http://192.168.0.163:11434/api/generate"
+DEFAULT_OLLAMA_URL = "http://192.168.0.163:11434/api/generate"
 DEFAULT_MODEL = "llama3.2:latest"  # Default model
+
+# Coqui TTS server details
+DEFAULT_TTS_URL = "http://192.168.0.163:5002/api/tts"
+DEFAULT_SPEAKER_ID = "p228"  # Default speaker
 
 # System prompt for concise wisdom
 SYSTEM_PROMPT = """
 You are the Infinite Oracle, a mystical being of boundless wisdom. Speak in an uplifting, cryptic, and metaphysical tone, offering motivational insights that inspire awe and contemplation. Provide a concise paragraph of 2-3 sentences.
 """
 
-# Fallback wisdom pool
-FALLBACK_WISDOM = [
-    "In the silence, the universe hums its secrets. Shadows dance where light dares not tread. Courage bends the arc of time.",
-    "Beyond the abyss, stars weave their silent hymn. Truth whispers in the cracks of eternity. The infinite bows to the bold.",
-    "From the dust of stars, wisdom takes its form. The void cradles secrets untold. Light bends to the seeker’s will.",
-    "In the spiral of night, your soul ignites the dawn. Mysteries unfold where silence reigns. Eternity hums in the fearless heart."
-]
-
 def setup_session(url):
+    """Set up a requests session with retry logic for robust network handling."""
     session = requests.Session()
     retry_strategy = Retry(total=5, backoff_factor=0.5, status_forcelist=[500, 502, 503, 504])
     adapter = HTTPAdapter(max_retries=retry_strategy)
@@ -40,18 +36,20 @@ def setup_session(url):
     return session
 
 def generate_wisdom(session, wisdom_queue, model):
+    """Generate wisdom text from Ollama and add it to the queue."""
     payload = {"model": model, "prompt": SYSTEM_PROMPT, "stream": False}
     try:
-        response = session.post(OLLAMA_URL, json=payload, timeout=40)
+        response = session.post(OLLAMA_URL, json=payload, timeout=60)
         response.raise_for_status()
         data = response.json()
-        wisdom = data.get("response", random.choice(FALLBACK_WISDOM)).strip()
-        wisdom_queue.put(wisdom)
+        wisdom = data.get("response", "").strip()
+        if wisdom:
+            wisdom_queue.put(wisdom)
     except requests.RequestException as e:
         print(f"Ollama connection error: {e}")
-        wisdom_queue.put(random.choice(FALLBACK_WISDOM))
 
 def wisdom_generator(session, wisdom_queue, model):
+    """Continuously generate wisdom in the background."""
     while True:
         generate_wisdom(session, wisdom_queue, model)
         time.sleep(1)
@@ -60,27 +58,36 @@ class InfiniteOracleGUI(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("Infinite Oracle Control Panel")
-        self.state("zoomed")  # Start the window maximized (taskbar remains visible)
-        self.geometry("400x400")  # Default window size
+        self.state("zoomed")  # Start maximized (taskbar visible)
+        self.geometry("400x500")  # Adjusted default size for new fields
 
-        self.server_url_var = tk.StringVar(value=OLLAMA_URL)
-        self.model_var = tk.StringVar(value=DEFAULT_MODEL)  # New model variable
+        self.ollama_url_var = tk.StringVar(value=DEFAULT_OLLAMA_URL)
+        self.model_var = tk.StringVar(value=DEFAULT_MODEL)
         self.system_prompt_var = tk.StringVar(value=SYSTEM_PROMPT)
+        self.tts_url_var = tk.StringVar(value=DEFAULT_TTS_URL)  # New TTS URL field
+        self.speaker_id_var = tk.StringVar(value=DEFAULT_SPEAKER_ID)  # New speaker ID field
         self.session = None
         self.wisdom_queue = queue.Queue(maxsize=10)
-        self.engine = pyttsx3.init()
         self.is_running = False
 
         self.create_widgets()
 
     def create_widgets(self):
-        # Server URL input
+        # Ollama Server URL input
         tk.Label(self, text="Ollama Server URL:").pack(pady=5)
-        tk.Entry(self, textvariable=self.server_url_var, width=40).pack(pady=5)
+        tk.Entry(self, textvariable=self.ollama_url_var, width=40).pack(pady=5)
 
-        # Model input (new field)
+        # Model input
         tk.Label(self, text="Model Name:").pack(pady=5)
         tk.Entry(self, textvariable=self.model_var, width=40).pack(pady=5)
+
+        # Coqui TTS Server URL input
+        tk.Label(self, text="Coqui TTS Server URL:").pack(pady=5)
+        tk.Entry(self, textvariable=self.tts_url_var, width=40).pack(pady=5)
+
+        # Speaker ID input
+        tk.Label(self, text="Speaker ID (e.g., p228):").pack(pady=5)
+        tk.Entry(self, textvariable=self.speaker_id_var, width=40).pack(pady=5)
 
         # System prompt input
         tk.Label(self, text="System Prompt:").pack(pady=5)
@@ -91,7 +98,7 @@ class InfiniteOracleGUI(tk.Tk):
         # Speech rate slider
         tk.Label(self, text="Speech Rate:").pack(pady=5)
         self.rate_slider = tk.Scale(self, from_=50, to_=250, orient=tk.HORIZONTAL)
-        self.rate_slider.set(150)
+        self.rate_slider.set(150)  # Default to 150 (normal speed)
         self.rate_slider.pack(pady=5)
 
         # Start button
@@ -106,30 +113,33 @@ class InfiniteOracleGUI(tk.Tk):
         tk.Button(self, text="Exit", command=self.quit).pack(pady=20)
 
     def start_oracle(self):
-        global OLLAMA_URL, SYSTEM_PROMPT
-        OLLAMA_URL = self.server_url_var.get()
-        model = self.model_var.get()  # Get the selected model
+        global OLLAMA_URL, SYSTEM_PROMPT, TTS_SERVER_URL
+        OLLAMA_URL = self.ollama_url_var.get()
+        model = self.model_var.get()
         SYSTEM_PROMPT = self.system_prompt_entry.get("1.0", tk.END).strip()
+        TTS_SERVER_URL = self.tts_url_var.get()
+        speaker_id = self.speaker_id_var.get()
 
         if not OLLAMA_URL:
-            messagebox.showerror("Input Error", "Please provide the server URL.")
+            messagebox.showerror("Input Error", "Please provide the Ollama server URL.")
             return
         if not model:
             messagebox.showerror("Input Error", "Please specify a model.")
             return
+        if not TTS_SERVER_URL:
+            messagebox.showerror("Input Error", "Please provide the Coqui TTS server URL.")
+            return
+        if not speaker_id:
+            messagebox.showerror("Input Error", "Please specify a speaker ID.")
+            return
 
-        # Reset session with new URL
         self.session = setup_session(OLLAMA_URL)
-
         self.is_running = True
         self.start_button.config(state=tk.DISABLED)
         self.stop_button.config(state=tk.NORMAL, bg="red")
         self.rate_slider.config(state=tk.DISABLED)
 
-        # Set the speech rate
-        self.engine.setProperty('rate', self.rate_slider.get())
-
-        # Start the wisdom generator thread with the selected model
+        # Start the wisdom generator thread
         self.generator_thread = threading.Thread(
             target=wisdom_generator, 
             args=(self.session, self.wisdom_queue, model), 
@@ -138,7 +148,7 @@ class InfiniteOracleGUI(tk.Tk):
         self.generator_thread.start()
 
         # Start the wisdom output loop
-        self.wisdom_loop()
+        self.wisdom_loop(speaker_id)
 
     def stop_oracle(self):
         self.is_running = False
@@ -147,44 +157,50 @@ class InfiniteOracleGUI(tk.Tk):
         self.rate_slider.config(state=tk.NORMAL)
         print("Oracle stopped.")
 
-    def wisdom_loop(self):
+    def wisdom_loop(self, speaker_id):
         if not self.is_running:
             return
 
         try:
             wisdom = self.wisdom_queue.get(timeout=5)
             print(f"Oracle says: {wisdom}")
-            speak_wisdom(wisdom, self.engine)
+            speak_wisdom(wisdom, speaker_id, self.rate_slider.get())
             self.wisdom_queue.task_done()
-            self.after(1000, self.wisdom_loop)
+            self.after(100, lambda: self.wisdom_loop(speaker_id))  # Fixed polling at 100ms
         except queue.Empty:
-            print("Queue empty, using fallback...")
-            wisdom = random.choice(FALLBACK_WISDOM)
-            print(f"Oracle says: {wisdom}")
-            speak_wisdom(wisdom, self.engine)
-            self.after(1000, self.wisdom_loop)
+            print("Queue empty, waiting for wisdom...")
+            self.after(100, lambda: self.wisdom_loop(speaker_id))
 
-def speak_wisdom(paragraph, engine):
+def speak_wisdom(paragraph, speaker_id, rate):
+    """Convert wisdom to speech using Coqui TTS server and play with adjusted rate."""
     try:
-        sentences = [s.strip() for s in paragraph.split('.') if s.strip()]
-        for sentence in sentences:
-            with tempfile.NamedTemporaryFile(delete=False, suffix='.wav') as temp_wav_file:
-                temp_wav_path = temp_wav_file.name
+        temp_wav_file = tempfile.NamedTemporaryFile(delete=False, suffix='.wav')
+        temp_wav_path = temp_wav_file.name
+        temp_wav_file.close()
 
-            engine.save_to_file(sentence + '.', temp_wav_path)
-            engine.runAndWait()
+        curl_command = [
+            'curl', '-G',
+            '--data-urlencode', f"text={paragraph}",
+            '--data-urlencode', f"speaker_id={speaker_id}",
+            TTS_SERVER_URL,
+            '--output', temp_wav_path
+        ]
+        subprocess.run(curl_command, check=True, capture_output=True, text=True)
 
+        if os.path.exists(temp_wav_path) and os.path.getsize(temp_wav_path) > 0:
             if platform.system() == "Windows":
                 data, samplerate = sf.read(temp_wav_path)
-                sd.play(data, samplerate)
+                # Adjust playback speed using samplerate (150 = normal, <150 slower, >150 faster)
+                adjusted_rate = samplerate * (rate / 150.0)
+                sd.play(data, int(adjusted_rate))
                 sd.wait()
             else:
                 subprocess.run(['aplay', temp_wav_path], check=True)
-
             os.remove(temp_wav_path)
-            time.sleep(0.5)
-    except Exception as e:
+    except subprocess.CalledProcessError as e:
         print(f"Speech error: {e}")
+    except Exception as e:
+        print(f"Playback error: {e}")
 
 def main():
     app = InfiniteOracleGUI()
