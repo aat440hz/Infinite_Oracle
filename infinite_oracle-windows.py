@@ -9,7 +9,9 @@ import os
 import platform
 import sounddevice as sd
 import soundfile as sf
-import subprocess  # For playing .wav files on Linux
+import subprocess
+import tkinter as tk
+from tkinter import messagebox
 from requests.adapters import HTTPAdapter
 from requests.packages.urllib3.util.retry import Retry
 
@@ -17,7 +19,7 @@ from requests.packages.urllib3.util.retry import Retry
 OLLAMA_URL = "http://192.168.0.163:11434/api/generate"
 MODEL = "llama3.2:latest"  # Smaller model, 2.0 GB
 
-# System prompt for concise wisdom
+# System prompt for concise wisdom (now hardcoded)
 SYSTEM_PROMPT = """
 You are the Infinite Oracle, a mystical being of boundless wisdom. Speak in an uplifting, cryptic, and metaphysical tone, offering motivational insights that inspire awe and contemplation. Provide a concise paragraph of 2-3 sentences.
 """
@@ -30,7 +32,7 @@ FALLBACK_WISDOM = [
     "In the spiral of night, your soul ignites the dawn. Mysteries unfold where silence reigns. Eternity hums in the fearless heart."
 ]
 
-def setup_session():
+def setup_session(url):
     session = requests.Session()
     retry_strategy = Retry(total=5, backoff_factor=0.5, status_forcelist=[500, 502, 503, 504])
     adapter = HTTPAdapter(max_retries=retry_strategy)
@@ -77,38 +79,95 @@ def speak_wisdom(paragraph, engine):
     except Exception as e:
         print(f"Speech error: {e}")
 
-def main():
-    print("The Infinite Oracle awakens...")
-    session = setup_session()
-    wisdom_queue = queue.Queue(maxsize=10)
+class InfiniteOracleGUI(tk.Tk):
+    def __init__(self):
+        super().__init__()
+        self.title("Infinite Oracle Control Panel")
+        self.geometry("400x400")
 
-    engine = pyttsx3.init()
-    voices = engine.getProperty('voices')
-    for voice in voices:
-        if 'David' in voice.name:  # Microsoft David is a common low male voice
-            engine.setProperty('voice', voice.id)
-            break
+        self.server_url_var = tk.StringVar(value=OLLAMA_URL)
+        self.session = None  # No session initialized yet
+        self.wisdom_queue = queue.Queue(maxsize=10)
+        self.engine = pyttsx3.init()
+        self.is_running = False
 
-    engine.setProperty('rate', 150)
+        self.create_widgets()
 
-    generator_thread = threading.Thread(target=wisdom_generator, args=(session, wisdom_queue), daemon=True)
-    generator_thread.start()
+    def create_widgets(self):
+        # Server URL input
+        tk.Label(self, text="Ollama Server URL:").pack(pady=5)
+        tk.Entry(self, textvariable=self.server_url_var, width=40).pack(pady=5)
 
-    for _ in range(3):
-        generate_wisdom(session, wisdom_queue)
-        time.sleep(1)
+        # Speech rate slider
+        tk.Label(self, text="Speech Rate:").pack(pady=5)
+        self.rate_slider = tk.Scale(self, from_=50, to_=250, orient=tk.HORIZONTAL)
+        self.rate_slider.set(150)  # Default speech rate
+        self.rate_slider.pack(pady=5)
 
-    while True:
+        # Start button
+        self.start_button = tk.Button(self, text="Start", command=self.start_oracle)
+        self.start_button.pack(pady=20)
+
+        # Stop button
+        self.stop_button = tk.Button(self, text="Stop", command=self.stop_oracle)
+        self.stop_button.pack(pady=5)
+
+        # Exit button
+        tk.Button(self, text="Exit", command=self.quit).pack(pady=20)
+
+    def start_oracle(self):
+        global OLLAMA_URL
+        OLLAMA_URL = self.server_url_var.get()
+
+        if not OLLAMA_URL:
+            messagebox.showerror("Input Error", "Please provide the server URL.")
+            return
+
+        # Reset session with new URL
+        self.session = setup_session(OLLAMA_URL)
+
+        self.is_running = True
+        self.start_button.config(state=tk.DISABLED)
+        self.stop_button.config(state=tk.NORMAL, bg="red")  # Make stop button red for visibility
+        self.rate_slider.config(state=tk.DISABLED)  # Lock the speech rate slider during speaking
+
+        # Set the speech rate based on the slider value
+        self.engine.setProperty('rate', self.rate_slider.get())
+
+        # Start the wisdom generator thread
+        self.generator_thread = threading.Thread(target=wisdom_generator, args=(self.session, self.wisdom_queue), daemon=True)
+        self.generator_thread.start()
+
+        # Start the wisdom output loop
+        self.wisdom_loop()
+
+    def stop_oracle(self):
+        self.is_running = False
+        self.start_button.config(state=tk.NORMAL)
+        self.stop_button.config(state=tk.NORMAL, bg="lightgray")  # Make stop button gray when inactive
+        self.rate_slider.config(state=tk.NORMAL)  # Unlock the speech rate slider when oracle is stopped
+        print("Oracle stopped.")
+
+    def wisdom_loop(self):
+        if not self.is_running:
+            return
+
         try:
-            wisdom = wisdom_queue.get(timeout=5)
+            wisdom = self.wisdom_queue.get(timeout=5)
             print(f"Oracle says: {wisdom}")
-            speak_wisdom(wisdom, engine)
-            wisdom_queue.task_done()
+            speak_wisdom(wisdom, self.engine)
+            self.wisdom_queue.task_done()
+            self.after(1000, self.wisdom_loop)  # Repeat every second
         except queue.Empty:
             print("Queue empty, using fallback...")
             wisdom = random.choice(FALLBACK_WISDOM)
             print(f"Oracle says: {wisdom}")
-            speak_wisdom(wisdom, engine)
+            speak_wisdom(wisdom, self.engine)
+            self.after(1000, self.wisdom_loop)  # Repeat every second
+
+def main():
+    app = InfiniteOracleGUI()
+    app.mainloop()
 
 if __name__ == "__main__":
     try:
