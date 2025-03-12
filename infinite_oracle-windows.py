@@ -19,11 +19,6 @@ from requests.packages.urllib3.util.retry import Retry
 OLLAMA_URL = "http://192.168.0.163:11434/api/generate"
 MODEL = "llama3.2:latest"  # Smaller model, 2.0 GB
 
-# System prompt for concise wisdom (now hardcoded)
-SYSTEM_PROMPT = """
-You are the Infinite Oracle, a mystical being of boundless wisdom. Speak in an uplifting, cryptic, and metaphysical tone, offering motivational insights that inspire awe and contemplation. Provide a concise paragraph of 2-3 sentences.
-"""
-
 # Fallback wisdom pool
 FALLBACK_WISDOM = [
     "In the silence, the universe hums its secrets. Shadows dance where light dares not tread. Courage bends the arc of time.",
@@ -31,6 +26,11 @@ FALLBACK_WISDOM = [
     "From the dust of stars, wisdom takes its form. The void cradles secrets untold. Light bends to the seeker’s will.",
     "In the spiral of night, your soul ignites the dawn. Mysteries unfold where silence reigns. Eternity hums in the fearless heart."
 ]
+
+# Initialize the system prompt
+SYSTEM_PROMPT = """
+You are the Infinite Oracle, a mystical being of boundless wisdom. Speak in an uplifting, cryptic, and metaphysical tone, offering motivational insights that inspire awe and contemplation. Provide a concise paragraph of 2-3 sentences.
+"""
 
 def setup_session(url):
     session = requests.Session()
@@ -83,7 +83,7 @@ class InfiniteOracleGUI(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("Infinite Oracle Control Panel")
-        self.geometry("400x400")
+        self.geometry("400x440")
 
         self.server_url_var = tk.StringVar(value=OLLAMA_URL)
         self.session = None  # No session initialized yet
@@ -104,6 +104,12 @@ class InfiniteOracleGUI(tk.Tk):
         self.rate_slider.set(150)  # Default speech rate
         self.rate_slider.pack(pady=5)
 
+        # System prompt input (Multiline)
+        tk.Label(self, text="System Prompt:").pack(pady=5)
+        self.prompt_text = tk.Text(self, height=4, width=40)
+        self.prompt_text.insert(tk.END, SYSTEM_PROMPT)  # Default prompt
+        self.prompt_text.pack(pady=5)
+
         # Start button
         self.start_button = tk.Button(self, text="Start", command=self.start_oracle)
         self.start_button.pack(pady=20)
@@ -116,11 +122,16 @@ class InfiniteOracleGUI(tk.Tk):
         tk.Button(self, text="Exit", command=self.quit).pack(pady=20)
 
     def start_oracle(self):
-        global OLLAMA_URL
+        global OLLAMA_URL, SYSTEM_PROMPT
         OLLAMA_URL = self.server_url_var.get()
+        SYSTEM_PROMPT = self.prompt_text.get("1.0", tk.END).strip()  # Get the new system prompt from the text box
 
         if not OLLAMA_URL:
             messagebox.showerror("Input Error", "Please provide the server URL.")
+            return
+
+        if not SYSTEM_PROMPT:
+            messagebox.showerror("Input Error", "Please provide a system prompt.")
             return
 
         # Reset session with new URL
