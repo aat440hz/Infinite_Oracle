@@ -1,4 +1,4 @@
-Infinite Oracle (Windows Version)
+#Infinite Oracle (Windows Version)#
 
 The Infinite Oracle is a mystical text-to-speech application that generates cryptic, uplifting wisdom using Ollama and Coqui TTS, with a Tkinter GUI featuring a pitch slider and embedded console. This version is tailored for Windows, built as a standalone .exe with no console popups.
 
@@ -71,7 +71,7 @@ Releases
   - Go to GitHub repo > "Releases" > "New release".
   - Attach infinite_oracle.exe—GitHub allows up to 2 GB for release assets.
 
- Infinite Oracle (Linux Version)
+ #Infinite Oracle (Linux Version)#
 
 The Infinite Oracle is a mystical text-to-speech application that generates cryptic, uplifting wisdom using Ollama and Coqui TTS, running as a command-line script on Linux with continuous playback.
 
