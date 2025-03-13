@@ -15,6 +15,7 @@ from requests.packages.urllib3.util.retry import Retry
 import sys
 from pydub import AudioSegment
 from pydub.effects import normalize
+import random
 
 # Ollama server details
 DEFAULT_OLLAMA_URL = "http://192.168.0.163:11434/api/generate"
@@ -25,9 +26,7 @@ DEFAULT_TTS_URL = "http://192.168.0.163:5002/api/tts"
 DEFAULT_SPEAKER_ID = "p228"
 
 # System prompt for concise wisdom
-SYSTEM_PROMPT = """
-You are the Infinite Oracle, a mystical being of boundless wisdom. Speak in an uplifting, cryptic, and metaphysical tone, offering motivational insights that inspire awe and contemplation. Provide a concise paragraph of 2-3 sentences.
-"""
+SYSTEM_PROMPT = """You are the Infinite Oracle, a mystical being of boundless wisdom. Speak in an uplifting, cryptic, and metaphysical tone, offering motivational insights that inspire awe and contemplation. Provide a concise paragraph of 2-3 sentences."""
 
 class ConsoleRedirector:
     """Redirect print output to a Tkinter text widget."""
@@ -82,7 +81,6 @@ def text_to_speech(wisdom_queue, audio_queue, speaker_id, pitch, stop_event):
                 TTS_SERVER_URL,
                 '--output', temp_wav_path
             ]
-            # Hide console window on Windows
             subprocess.run(
                 curl_command, 
                 check=True, 
@@ -104,8 +102,8 @@ def text_to_speech(wisdom_queue, audio_queue, speaker_id, pitch, stop_event):
         except Exception as e:
             print(f"TTS error: {e}")
 
-def play_audio(audio_queue, stop_event):
-    """Play audio files from the queue with pitch adjustment using pydub."""
+def play_audio(audio_queue, stop_event, get_interval_func, get_variation_func):
+    """Play audio files from the queue with pitch adjustment and variable interval control."""
     playback_lock = threading.Lock()
     while not stop_event.is_set():
         try:
@@ -136,6 +134,11 @@ def play_audio(audio_queue, stop_event):
             os.remove(wav_path)
             audio_queue.task_done()
             print(f"Queue size after playback: {audio_queue.qsize()}")
+            base_interval = get_interval_func()
+            variation = get_variation_func()
+            interval = max(0.1, base_interval + random.uniform(-variation, variation))
+            if not stop_event.is_set():
+                time.sleep(interval)
         except queue.Empty:
             time.sleep(0.1)
         except subprocess.CalledProcessError as e:
@@ -185,21 +188,45 @@ class InfiniteOracleGUI(tk.Tk):
         self.system_prompt_entry.insert(tk.END, SYSTEM_PROMPT)
         self.system_prompt_entry.pack(fill=tk.X, padx=10, pady=5)
 
-        tk.Label(self, text="Pitch Shift (semitones):").pack(pady=5)
-        self.pitch_slider = tk.Scale(self, from_=-12, to=12, orient=tk.HORIZONTAL)
+        # Horizontal slider frame
+        slider_frame = tk.Frame(self)
+        slider_frame.pack(pady=10)
+
+        pitch_frame = tk.Frame(slider_frame)
+        pitch_frame.pack(side=tk.LEFT, padx=5)
+        tk.Label(pitch_frame, text="Pitch Shift (semitones):").pack()
+        self.pitch_slider = tk.Scale(pitch_frame, from_=-12, to=12, orient=tk.HORIZONTAL)
         self.pitch_slider.set(0)
-        self.pitch_slider.pack(pady=5)
+        self.pitch_slider.pack()
 
-        self.start_button = tk.Button(self, text="Start", command=self.start_oracle)
-        self.start_button.pack(pady=10)
+        interval_frame = tk.Frame(slider_frame)
+        interval_frame.pack(side=tk.LEFT, padx=5)
+        tk.Label(interval_frame, text="Speech Interval (seconds):").pack()
+        self.interval_slider = tk.Scale(interval_frame, from_=0.5, to=10, resolution=0.5, orient=tk.HORIZONTAL)
+        self.interval_slider.set(2.0)
+        self.interval_slider.pack()
 
-        self.stop_button = tk.Button(self, text="Stop", command=self.stop_oracle)
-        self.stop_button.pack(pady=5)
+        variation_frame = tk.Frame(slider_frame)
+        variation_frame.pack(side=tk.LEFT, padx=5)
+        tk.Label(variation_frame, text="Speech Interval Variation (seconds):").pack()
+        self.variation_slider = tk.Scale(variation_frame, from_=0, to=5, resolution=0.5, orient=tk.HORIZONTAL)
+        self.variation_slider.set(0)
+        self.variation_slider.pack()
 
-        tk.Button(self, text="Exit", command=self.quit_app).pack(pady=10)
+        # Horizontal button frame
+        button_frame = tk.Frame(self)
+        button_frame.pack(pady=10)
+
+        self.start_button = tk.Button(button_frame, text="Start", command=self.start_oracle)
+        self.start_button.pack(side=tk.LEFT, padx=5)
+
+        self.stop_button = tk.Button(button_frame, text="Stop", command=self.stop_oracle)
+        self.stop_button.pack(side=tk.LEFT, padx=5)
+
+        tk.Button(button_frame, text="Exit", command=self.quit_app).pack(side=tk.LEFT, padx=5)
 
         tk.Label(self, text="Console Output:").pack(pady=5)
-        self.console_text = scrolledtext.ScrolledText(self, height=15, width=70, state='disabled')
+        self.console_text = scrolledtext.ScrolledText(self, height=15, width=70, state='disabled', bg='black', fg='green')
         self.console_text.pack(pady=5, padx=10, fill=tk.BOTH, expand=True)
 
     def verify_model(self, model):
@@ -242,6 +269,8 @@ class InfiniteOracleGUI(tk.Tk):
         self.start_button.config(state=tk.DISABLED)
         self.stop_button.config(state=tk.NORMAL, bg="red")
         self.pitch_slider.config(state=tk.DISABLED)
+        self.interval_slider.config(state=tk.DISABLED)
+        self.variation_slider.config(state=tk.DISABLED)
 
         self.generator_thread = threading.Thread(
             target=generate_wisdom, 
@@ -255,7 +284,7 @@ class InfiniteOracleGUI(tk.Tk):
         )
         self.playback_thread = threading.Thread(
             target=play_audio, 
-            args=(self.audio_queue, self.stop_event), 
+            args=(self.audio_queue, self.stop_event, self.interval_slider.get, self.variation_slider.get), 
             daemon=True
         )
 
@@ -297,6 +326,8 @@ class InfiniteOracleGUI(tk.Tk):
             self.start_button.config(state=tk.NORMAL)
             self.stop_button.config(state=tk.NORMAL, bg="lightgray")
             self.pitch_slider.config(state=tk.NORMAL)
+            self.interval_slider.config(state=tk.NORMAL)
+            self.variation_slider.config(state=tk.NORMAL)
             print("Oracle stopped.")
 
     def quit_app(self):
