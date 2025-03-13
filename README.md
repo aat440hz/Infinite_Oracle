@@ -1,4 +1,4 @@
-#Infinite Oracle (Windows Version)#
+Infinite Oracle (Windows Version)
 
 The Infinite Oracle is a mystical text-to-speech application that generates cryptic, uplifting wisdom using Ollama and Coqui TTS, with a Tkinter GUI featuring a pitch slider and embedded console. This version is tailored for Windows, built as a standalone .exe with no console popups.
 
@@ -26,7 +26,7 @@ Installation
 
 Option 1: Run Prebuilt .exe
 1. Download:
-   - Grab infinite_oracle.exe from the Releases page.
+   - Grab infinite_oracle.exe from the Releases page (https://github.com/aat440hz/Infinite_Oracle/releases) (see note below on file size).
    - Size: ~54 MB (includes ffmpeg).
 2. Run:
    infinite_oracle.exe
@@ -68,10 +68,10 @@ Using Git LFS
 
 Releases
 - Alternatively, upload infinite_oracle.exe as a release asset:
-  - Go to GitHub repo > "Releases" > "New release".
+  - Go to GitHub repo > "Releases" > "New release" at https://github.com/aat440hz/Infinite_Oracle/releases.
   - Attach infinite_oracle.exe—GitHub allows up to 2 GB for release assets.
 
- #Infinite Oracle (Linux Version)#
+ Infinite Oracle (Linux Version)
 
 The Infinite Oracle is a mystical text-to-speech application that generates cryptic, uplifting wisdom using Ollama and Coqui TTS, running as a command-line script on Linux with continuous playback.
 
@@ -99,8 +99,8 @@ Installation
 3. Install System Tools:
    sudo apt install curl alsa-utils
 4. Clone or Download:
-   git clone https://github.com/yourusername/yourrepo.git
-   cd yourrepo
+   git clone https://github.com/aat440hz/Infinite_Oracle.git
+   cd Infinite_Oracle
 
 Running
 1. Ensure Ollama and Coqui TTS servers are running at specified URLs.
