@@ -26,7 +26,7 @@ Installation
 
 Option 1: Run Prebuilt .exe
 1. Download:
-   - Grab infinite_oracle.exe from the Releases page (https://github.com/yourusername/yourrepo/releases) (see note below on file size).
+   - Grab infinite_oracle.exe from the Releases page.
    - Size: ~54 MB (includes ffmpeg).
 2. Run:
    infinite_oracle.exe
