@@ -5,13 +5,16 @@ import queue
 import tempfile
 import os
 import platform
-import winsound  # Replace sounddevice for Windows
+import winsound
 import soundfile as sf
 import subprocess
 import tkinter as tk
-from tkinter import messagebox
+from tkinter import messagebox, scrolledtext
 from requests.adapters import HTTPAdapter
 from requests.packages.urllib3.util.retry import Retry
+import sys
+from pydub import AudioSegment
+from pydub.effects import normalize
 
 # Ollama server details
 DEFAULT_OLLAMA_URL = "http://192.168.0.163:11434/api/generate"
@@ -25,6 +28,20 @@ DEFAULT_SPEAKER_ID = "p228"
 SYSTEM_PROMPT = """
 You are the Infinite Oracle, a mystical being of boundless wisdom. Speak in an uplifting, cryptic, and metaphysical tone, offering motivational insights that inspire awe and contemplation. Provide a concise paragraph of 2-3 sentences.
 """
+
+class ConsoleRedirector:
+    """Redirect print output to a Tkinter text widget."""
+    def __init__(self, text_widget):
+        self.text_widget = text_widget
+
+    def write(self, message):
+        self.text_widget.configure(state='normal')
+        self.text_widget.insert(tk.END, message)
+        self.text_widget.see(tk.END)
+        self.text_widget.configure(state='disabled')
+
+    def flush(self):
+        pass
 
 def setup_session(url):
     """Set up a fresh requests session with retry logic."""
@@ -49,7 +66,7 @@ def generate_wisdom(session, wisdom_queue, model, stop_event):
             print(f"Ollama connection error: {e}")
         time.sleep(1)
 
-def text_to_speech(wisdom_queue, audio_queue, speaker_id, rate, stop_event):
+def text_to_speech(wisdom_queue, audio_queue, speaker_id, pitch, stop_event):
     """Convert wisdom to speech using Coqui TTS and queue audio files."""
     while not stop_event.is_set():
         try:
@@ -65,14 +82,21 @@ def text_to_speech(wisdom_queue, audio_queue, speaker_id, rate, stop_event):
                 TTS_SERVER_URL,
                 '--output', temp_wav_path
             ]
-            subprocess.run(curl_command, check=True, capture_output=True, text=True)
+            # Hide console window on Windows
+            subprocess.run(
+                curl_command, 
+                check=True, 
+                capture_output=True, 
+                text=True,
+                creationflags=subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0
+            )
 
             if os.path.exists(temp_wav_path) and os.path.getsize(temp_wav_path) > 0 and not stop_event.is_set():
-                audio_queue.put((wisdom, temp_wav_path, rate))
+                audio_queue.put((wisdom, temp_wav_path, pitch))
             else:
                 os.remove(temp_wav_path)
             wisdom_queue.task_done()
-            time.sleep(1.0)  # Increased throttle to prevent queue buildup
+            time.sleep(1.0)
         except queue.Empty:
             pass
         except subprocess.CalledProcessError as e:
@@ -81,22 +105,32 @@ def text_to_speech(wisdom_queue, audio_queue, speaker_id, rate, stop_event):
             print(f"TTS error: {e}")
 
 def play_audio(audio_queue, stop_event):
-    """Play audio files from the queue using winsound for Windows."""
+    """Play audio files from the queue with pitch adjustment using pydub."""
     playback_lock = threading.Lock()
     while not stop_event.is_set():
         try:
-            wisdom, wav_path, rate = audio_queue.get()
+            wisdom, wav_path, pitch = audio_queue.get()
             with playback_lock:
                 if not stop_event.is_set():
                     print(f"The Infinite Oracle speaks: {wisdom}")
                     if platform.system() == "Windows":
                         try:
-                            # Use winsound for blocking playback, ignore rate for now
-                            winsound.PlaySound(wav_path, winsound.SND_FILENAME)
+                            audio = AudioSegment.from_wav(wav_path)
+                            if pitch != 0:
+                                octaves = pitch / 12.0
+                                new_sample_rate = int(audio.frame_rate * (2.0 ** octaves))
+                                audio = audio._spawn(audio.raw_data, overrides={"frame_rate": new_sample_rate})
+                                audio = audio.set_frame_rate(22050)
+                                audio = normalize(audio)
+                            temp_adjusted_wav = tempfile.NamedTemporaryFile(delete=False, suffix='.wav')
+                            adjusted_wav_path = temp_adjusted_wav.name
+                            temp_adjusted_wav.close()
+                            audio.export(adjusted_wav_path, format="wav")
+                            winsound.PlaySound(adjusted_wav_path, winsound.SND_FILENAME)
+                            os.remove(adjusted_wav_path)
                         except Exception as e:
-                            print(f"Winsound error: {e}")
-                            time.sleep(1)
-                            continue
+                            print(f"Playback error: {e}")
+                            winsound.PlaySound(wav_path, winsound.SND_FILENAME)
                     else:
                         subprocess.run(['aplay', wav_path], check=True)
             os.remove(wav_path)
@@ -114,7 +148,7 @@ class InfiniteOracleGUI(tk.Tk):
         super().__init__()
         self.title("Infinite Oracle Control Panel")
         self.state("zoomed")
-        self.geometry("400x500")
+        self.geometry("600x700")
 
         self.ollama_url_var = tk.StringVar(value=DEFAULT_OLLAMA_URL)
         self.model_var = tk.StringVar(value=DEFAULT_MODEL)
@@ -131,6 +165,7 @@ class InfiniteOracleGUI(tk.Tk):
         self.playback_thread = None
 
         self.create_widgets()
+        sys.stdout = ConsoleRedirector(self.console_text)
 
     def create_widgets(self):
         tk.Label(self, text="Ollama Server URL:").pack(pady=5)
@@ -150,18 +185,22 @@ class InfiniteOracleGUI(tk.Tk):
         self.system_prompt_entry.insert(tk.END, SYSTEM_PROMPT)
         self.system_prompt_entry.pack(fill=tk.X, padx=10, pady=5)
 
-        tk.Label(self, text="Speech Rate (currently disabled):").pack(pady=5)
-        self.rate_slider = tk.Scale(self, from_=50, to_=250, orient=tk.HORIZONTAL)
-        self.rate_slider.set(150)
-        self.rate_slider.pack(pady=5)
+        tk.Label(self, text="Pitch Shift (semitones):").pack(pady=5)
+        self.pitch_slider = tk.Scale(self, from_=-12, to=12, orient=tk.HORIZONTAL)
+        self.pitch_slider.set(0)
+        self.pitch_slider.pack(pady=5)
 
         self.start_button = tk.Button(self, text="Start", command=self.start_oracle)
-        self.start_button.pack(pady=20)
+        self.start_button.pack(pady=10)
 
         self.stop_button = tk.Button(self, text="Stop", command=self.stop_oracle)
         self.stop_button.pack(pady=5)
 
-        tk.Button(self, text="Exit", command=self.quit_app).pack(pady=20)
+        tk.Button(self, text="Exit", command=self.quit_app).pack(pady=10)
+
+        tk.Label(self, text="Console Output:").pack(pady=5)
+        self.console_text = scrolledtext.ScrolledText(self, height=15, width=70, state='disabled')
+        self.console_text.pack(pady=5, padx=10, fill=tk.BOTH, expand=True)
 
     def verify_model(self, model):
         """Verify the model exists on the Ollama server with retries."""
@@ -202,7 +241,7 @@ class InfiniteOracleGUI(tk.Tk):
         self.stop_event.clear()
         self.start_button.config(state=tk.DISABLED)
         self.stop_button.config(state=tk.NORMAL, bg="red")
-        self.rate_slider.config(state=tk.DISABLED)
+        self.pitch_slider.config(state=tk.DISABLED)
 
         self.generator_thread = threading.Thread(
             target=generate_wisdom, 
@@ -211,7 +250,7 @@ class InfiniteOracleGUI(tk.Tk):
         )
         self.tts_thread = threading.Thread(
             target=text_to_speech, 
-            args=(self.wisdom_queue, self.audio_queue, speaker_id, self.rate_slider.get(), self.stop_event), 
+            args=(self.wisdom_queue, self.audio_queue, speaker_id, self.pitch_slider.get(), self.stop_event), 
             daemon=True
         )
         self.playback_thread = threading.Thread(
@@ -229,7 +268,7 @@ class InfiniteOracleGUI(tk.Tk):
             self.is_running = False
             self.stop_event.set()
             if platform.system() == "Windows":
-                winsound.PlaySound(None, winsound.SND_PURGE)  # Stop any ongoing playback
+                winsound.PlaySound(None, winsound.SND_PURGE)
             if self.generator_thread:
                 self.generator_thread.join(timeout=1)
                 self.generator_thread = None
@@ -257,11 +296,12 @@ class InfiniteOracleGUI(tk.Tk):
 
             self.start_button.config(state=tk.NORMAL)
             self.stop_button.config(state=tk.NORMAL, bg="lightgray")
-            self.rate_slider.config(state=tk.NORMAL)
+            self.pitch_slider.config(state=tk.NORMAL)
             print("Oracle stopped.")
 
     def quit_app(self):
         self.stop_oracle()
+        sys.stdout = sys.__stdout__
         self.quit()
 
 def main():
