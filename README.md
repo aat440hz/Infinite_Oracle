@@ -22,7 +22,7 @@ Installation and Running
 Option 1: Run Prebuilt .exe
 1. Download:
    - Grab infinite_oracle-windows.exe from the Releases page (https://github.com/aat440hz/Infinite_Oracle/releases) (see note below on file size).
-   - Size: ~54 MB (includes ffmpeg).
+   - Size: ~53.1 MB (includes ffmpeg).
 2. Run:
    infinite_oracle-windows.exe
 3. Configure:
