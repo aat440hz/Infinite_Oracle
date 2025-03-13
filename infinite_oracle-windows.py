@@ -5,7 +5,7 @@ import queue
 import tempfile
 import os
 import platform
-import sounddevice as sd
+import winsound  # Replace sounddevice for Windows
 import soundfile as sf
 import subprocess
 import tkinter as tk
@@ -72,6 +72,7 @@ def text_to_speech(wisdom_queue, audio_queue, speaker_id, rate, stop_event):
             else:
                 os.remove(temp_wav_path)
             wisdom_queue.task_done()
+            time.sleep(1.0)  # Increased throttle to prevent queue buildup
         except queue.Empty:
             pass
         except subprocess.CalledProcessError as e:
@@ -80,25 +81,27 @@ def text_to_speech(wisdom_queue, audio_queue, speaker_id, rate, stop_event):
             print(f"TTS error: {e}")
 
 def play_audio(audio_queue, stop_event):
-    """Play audio files from the queue with adjusted rate, ensuring full playback."""
+    """Play audio files from the queue using winsound for Windows."""
+    playback_lock = threading.Lock()
     while not stop_event.is_set():
         try:
             wisdom, wav_path, rate = audio_queue.get()
-            if not stop_event.is_set():
-                print(f"The Infinite Oracle speaks: {wisdom}")
-                if platform.system() == "Windows":
-                    try:
-                        sd.stop()  # Clear any ongoing playback
-                        data, samplerate = sf.read(wav_path)
-                        adjusted_rate = samplerate * (rate / 150.0)
-                        sd.play(data, int(adjusted_rate))
-                        sd.wait()  # Wait for full playback
-                    except Exception as e:
-                        print(f"Sounddevice error: {e}")
-                else:
-                    subprocess.run(['aplay', wav_path], check=True)
+            with playback_lock:
+                if not stop_event.is_set():
+                    print(f"The Infinite Oracle speaks: {wisdom}")
+                    if platform.system() == "Windows":
+                        try:
+                            # Use winsound for blocking playback, ignore rate for now
+                            winsound.PlaySound(wav_path, winsound.SND_FILENAME)
+                        except Exception as e:
+                            print(f"Winsound error: {e}")
+                            time.sleep(1)
+                            continue
+                    else:
+                        subprocess.run(['aplay', wav_path], check=True)
             os.remove(wav_path)
             audio_queue.task_done()
+            print(f"Queue size after playback: {audio_queue.qsize()}")
         except queue.Empty:
             time.sleep(0.1)
         except subprocess.CalledProcessError as e:
@@ -111,7 +114,7 @@ class InfiniteOracleGUI(tk.Tk):
         super().__init__()
         self.title("Infinite Oracle Control Panel")
         self.state("zoomed")
-        self.geometry("700x700")
+        self.geometry("400x500")
 
         self.ollama_url_var = tk.StringVar(value=DEFAULT_OLLAMA_URL)
         self.model_var = tk.StringVar(value=DEFAULT_MODEL)
@@ -147,7 +150,7 @@ class InfiniteOracleGUI(tk.Tk):
         self.system_prompt_entry.insert(tk.END, SYSTEM_PROMPT)
         self.system_prompt_entry.pack(fill=tk.X, padx=10, pady=5)
 
-        tk.Label(self, text="Speech Rate:").pack(pady=5)
+        tk.Label(self, text="Speech Rate (currently disabled):").pack(pady=5)
         self.rate_slider = tk.Scale(self, from_=50, to_=250, orient=tk.HORIZONTAL)
         self.rate_slider.set(150)
         self.rate_slider.pack(pady=5)
@@ -164,7 +167,7 @@ class InfiniteOracleGUI(tk.Tk):
         """Verify the model exists on the Ollama server with retries."""
         temp_session = setup_session(OLLAMA_URL)
         payload = {"model": model, "prompt": "test", "stream": False}
-        for attempt in range(3):  # Retry up to 3 times
+        for attempt in range(3):
             try:
                 response = temp_session.post(OLLAMA_URL, json=payload, timeout=15)
                 response.raise_for_status()
@@ -172,8 +175,8 @@ class InfiniteOracleGUI(tk.Tk):
                 return True
             except requests.RequestException as e:
                 print(f"Model verification attempt {attempt + 1} failed: {e}")
-                if attempt < 2:  # Don’t sleep on the last attempt
-                    time.sleep(2)  # Wait before retrying
+                if attempt < 2:
+                    time.sleep(2)
         messagebox.showerror("Model Error", f"Model '{model}' not found or unavailable on Ollama server after retries.")
         return False
 
@@ -189,10 +192,8 @@ class InfiniteOracleGUI(tk.Tk):
             messagebox.showerror("Input Error", "Please fill all fields.")
             return
 
-        # Clean up previous run
         self.stop_oracle()
 
-        # Verify model with retries
         if not self.verify_model(model):
             return
 
@@ -227,7 +228,8 @@ class InfiniteOracleGUI(tk.Tk):
         if self.is_running:
             self.is_running = False
             self.stop_event.set()
-            sd.stop()  # Stop any ongoing playback
+            if platform.system() == "Windows":
+                winsound.PlaySound(None, winsound.SND_PURGE)  # Stop any ongoing playback
             if self.generator_thread:
                 self.generator_thread.join(timeout=1)
                 self.generator_thread = None
@@ -238,7 +240,6 @@ class InfiniteOracleGUI(tk.Tk):
                 self.playback_thread.join(timeout=1)
                 self.playback_thread = None
             
-            # Clear queues
             while not self.wisdom_queue.empty():
                 try:
                     self.wisdom_queue.get_nowait()
@@ -250,7 +251,6 @@ class InfiniteOracleGUI(tk.Tk):
                 except queue.Empty:
                     break
             
-            # Reset session
             if self.session:
                 self.session.close()
                 self.session = None
