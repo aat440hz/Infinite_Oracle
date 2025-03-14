@@ -1,56 +1,57 @@
+
 # Infinite Oracle (Windows Version)
 
-The Infinite Oracle is a mystical text-to-speech application that generates cryptic, uplifting wisdom using Ollama and Coqui TTS, with a Tkinter GUI featuring a pitch slider and embedded console. This version is tailored for Windows, provided as a standalone .exe with no console popups, or runnable as a Python script.
+The Infinite Oracle is a mystical text-to-speech application that generates cryptic, uplifting wisdom using Ollama and Coqui TTS, with a Tkinter GUI featuring a pitch slider, speech interval control, and embedded console. This version is tailored for Windows, provided as a standalone `.exe` with no console popups, or runnable as a Python script.
 
-Features
-- Generates wisdom from Ollama (llama3.2:latest) at a user-specified server (default: http://192.168.0.163:11434).
-- Converts text to speech via Coqui TTS (p228 voice) at a user-specified server (default: http://192.168.0.163:5002).
-- GUI with input fields, pitch control (-12 to +12 semitones), and embedded console output.
+### Features
+- Generates wisdom from Ollama (llama3.2:latest) at a user-specified server (default: `http://cherry.local:11434`).
+- Converts text to speech via Coqui TTS (p228 voice) at a user-specified server (default: `http://cherry.local:5002`).
+- GUI with input fields, pitch control (-12 to +12 semitones), speech interval and variation sliders, and embedded console output.
 - Pitch adjustment without speed change using pydub.
-- No CMD or curl console popups.
 
-Dependencies
-- For .exe: None—all required components (including ffmpeg for audio processing) are bundled.
-- For .py script:
+### Dependencies
+- For `.exe`: None—all required components (including ffmpeg for audio processing) are bundled.
+- For `.py` script:
   - Python 3.8+
-  - Libraries: requests, soundfile, pydub
-  - External tools: ffmpeg, curl (in PATH or local folder)
+  - Libraries: `requests`, `soundfile`, `pydub`
+  - External tools: `ffmpeg`, `curl` (in PATH or local folder)
 - Note: Requires Ollama and Coqui TTS servers running at user-specified URLs.
 
-Installation and Running
+### Installation and Running
 
-Option 1: Run Prebuilt .exe
-1. Download:
-   - Grab infinite_oracle-windows.exe from the Releases page (https://github.com/aat440hz/Infinite_Oracle/releases) (see note below on file size).
+#### Option 1: Run Prebuilt `.exe`
+1. **Download**:
+   - Grab `infinite_oracle.exe` from the [Releases page](https://github.com/aat440hz/Infinite_Oracle/releases) (see note below on file size).
    - Size: ~53.1 MB (includes ffmpeg).
-2. Run:
-   infinite_oracle-windows.exe
-3. Configure:
-   - Replace default server URLs (http://192.168.0.163:11434 for Ollama, http://192.168.0.163:5002 for Coqui TTS) with your own server addresses in the GUI fields.
+2. **Run**:
+   - `infinite_oracle.exe`
+3. **Configure**:
+   - Replace default server URLs (`http://cherry.local:11434` for Ollama, `http://cherry.local:5002` for Coqui TTS) with your own server addresses in the GUI fields.
    - Adjust model and speaker ID if different from defaults (llama3.2:latest, p228).
-   - Set pitch slider (-12 deep, +12 high).
+   - Set pitch slider (-12 deep, +12 high), speech interval, and speech interval variation.
    - Click "Start" to hear the Oracle’s wisdom in the GUI console.
 
-Option 2: Run Python Script
-1. Install Python:
+#### Option 2: Run Python Script
+1. **Install Python**:
    - Download from https://www.python.org/downloads/.
-2. Install Dependencies:
-   pip install requests soundfile pydub
-3. Install ffmpeg:
-   - Download from https://github.com/GyanD/codexffmpeg/releases (e.g., ffmpeg-release-essentials.zip).
-   - Extract and add ffmpeg.exe to PATH (e.g., C:\ffmpeg\bin) or place in the script folder.
-4. Ensure curl is available:
+2. **Install Dependencies**:
+   - `pip install requests soundfile pydub`
+3. **Install ffmpeg**:
+   - Download from https://github.com/GyanD/codexffmpeg/releases (e.g., `ffmpeg-release-essentials.zip`).
+   - Extract and add `ffmpeg.exe` to PATH (e.g., `C:\ffmpeg\bin`) or place in the script folder.
+4. **Ensure curl is available**:
    - Comes with Windows 10/11, or download from https://curl.se/windows/ and add to PATH.
-5. Download Script:
+5. **Download Script**:
    - Clone or download from https://github.com/aat440hz/Infinite_Oracle.git.
-   - Use infinite_oracle_windows.py.
-6. Run:
-   python infinite_oracle_windows.py
-7. Configure:
-   - Same as .exe: replace server URLs, adjust model/speaker, set pitch, and click "Start" in the GUI.
+   - Use `infinite_oracle_windows.py`.
+6. **Run**:
+   - `python infinite_oracle_windows.py`
+7. **Configure**:
+   - Same as `.exe`: replace server URLs, adjust model/speaker, set pitch, speech interval, and speech interval variation, and click "Start" in the GUI.
 
-Notes
-- Server Configuration: Replace http://192.168.0.163:11434 and http://192.168.0.163:5002 with your own Ollama and Coqui TTS server addresses in the GUI before running.
+### Notes
+- **Server Configuration**: Replace `http://cherry.local:11434` and `http://cherry.local:5002` with your own Ollama and Coqui TTS server addresses in the GUI before running.
+- **Speech Interval and Variation**: New sliders to control the interval between speech outputs and the variation in intervals for a more dynamic speech pattern.
 
 # Infinite Oracle (Linux Version)
 
