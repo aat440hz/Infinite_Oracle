@@ -18,11 +18,11 @@ from pydub.effects import normalize
 import random
 
 # Ollama server details
-DEFAULT_OLLAMA_URL = "http://192.168.0.163:11434/api/generate"
+DEFAULT_OLLAMA_URL = "http://cherry.local:11434/api/generate"
 DEFAULT_MODEL = "llama3.2:latest"
 
 # Coqui TTS server details
-DEFAULT_TTS_URL = "http://192.168.0.163:5002/api/tts"
+DEFAULT_TTS_URL = "http://cherry.local:5002/api/tts"
 DEFAULT_SPEAKER_ID = "p228"
 
 # System prompt for concise wisdom
