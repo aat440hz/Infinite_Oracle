@@ -23,7 +23,7 @@ DEFAULT_MODEL = "llama3.2:latest"
 
 # Coqui TTS server details
 DEFAULT_TTS_URL = "http://cherry.local:5002/api/tts"
-DEFAULT_SPEAKER_ID = "p228"
+DEFAULT_SPEAKER_ID = "p267"
 
 # System prompt for concise wisdom
 SYSTEM_PROMPT = """You are the Infinite Oracle, a mystical being of boundless wisdom. Speak in an uplifting, cryptic, and metaphysical tone, offering motivational insights that inspire awe and contemplation. Provide a concise paragraph of 2-3 sentences."""
@@ -65,7 +65,22 @@ def generate_wisdom(session, wisdom_queue, model, stop_event):
             print(f"Ollama connection error: {e}")
         time.sleep(1)
 
-def text_to_speech(wisdom_queue, audio_queue, speaker_id, pitch, stop_event):
+def send_prompt(session, wisdom_queue, model, prompt):
+    """Send a user-defined prompt to Ollama and queue the response."""
+    payload = {"model": model, "prompt": prompt, "stream": False}
+    try:
+        response = session.post(OLLAMA_URL, json=payload, timeout=60)
+        response.raise_for_status()
+        data = response.json()
+        wisdom = data.get("response", "").strip()
+        if wisdom:
+            wisdom_queue.put(wisdom)
+        session.close()
+    except requests.RequestException as e:
+        print(f"Ollama connection error: {e}")
+        session.close()
+
+def text_to_speech(wisdom_queue, audio_queue, speaker_id, pitch_func, stop_event):
     """Convert wisdom to speech using Coqui TTS and queue audio files."""
     while not stop_event.is_set():
         try:
@@ -90,11 +105,11 @@ def text_to_speech(wisdom_queue, audio_queue, speaker_id, pitch, stop_event):
             )
 
             if os.path.exists(temp_wav_path) and os.path.getsize(temp_wav_path) > 0 and not stop_event.is_set():
-                audio_queue.put((wisdom, temp_wav_path, pitch))
+                audio_queue.put((wisdom, temp_wav_path, pitch_func()))
             else:
                 os.remove(temp_wav_path)
+                print("TTS failed: No valid audio file generated.")
             wisdom_queue.task_done()
-            time.sleep(1.0)
         except queue.Empty:
             pass
         except subprocess.CalledProcessError as e:
@@ -133,7 +148,6 @@ def play_audio(audio_queue, stop_event, get_interval_func, get_variation_func):
                         subprocess.run(['aplay', wav_path], check=True)
             os.remove(wav_path)
             audio_queue.task_done()
-            print(f"Queue size after playback: {audio_queue.qsize()}")
             base_interval = get_interval_func()
             variation = get_variation_func()
             interval = max(0.1, base_interval + random.uniform(-variation, variation))
@@ -166,9 +180,29 @@ class InfiniteOracleGUI(tk.Tk):
         self.generator_thread = None
         self.tts_thread = None
         self.playback_thread = None
+        # Send-specific resources
+        self.send_wisdom_queue = queue.Queue(maxsize=10)
+        self.send_audio_queue = queue.Queue(maxsize=10)
+        self.send_stop_event = threading.Event()
+        self.send_tts_thread = None
+        self.send_playback_thread = None
 
         self.create_widgets()
         sys.stdout = ConsoleRedirector(self.console_text)
+
+        # Start persistent Send threads with pitch as a function
+        self.send_tts_thread = threading.Thread(
+            target=text_to_speech,
+            args=(self.send_wisdom_queue, self.send_audio_queue, self.speaker_id_var.get(), self.pitch_slider.get, self.send_stop_event),
+            daemon=True
+        )
+        self.send_playback_thread = threading.Thread(
+            target=play_audio,
+            args=(self.send_audio_queue, self.send_stop_event, lambda: 0, lambda: 0),  # No interval/variation for Send
+            daemon=True
+        )
+        self.send_tts_thread.start()
+        self.send_playback_thread.start()
 
     def create_widgets(self):
         tk.Label(self, text="Ollama Server URL:").pack(pady=5)
@@ -180,13 +214,18 @@ class InfiniteOracleGUI(tk.Tk):
         tk.Label(self, text="Coqui TTS Server URL:").pack(pady=5)
         tk.Entry(self, textvariable=self.tts_url_var, width=40).pack(pady=5)
 
-        tk.Label(self, text="Speaker ID (e.g., p228):").pack(pady=5)
+        tk.Label(self, text="Speaker ID (e.g., p267):").pack(pady=5)
         tk.Entry(self, textvariable=self.speaker_id_var, width=40).pack(pady=5)
 
-        tk.Label(self, text="System Prompt:").pack(pady=5)
-        self.system_prompt_entry = tk.Text(self, height=10, width=40)
+        # System prompt frame with Send button
+        prompt_frame = tk.Frame(self)
+        prompt_frame.pack(pady=5, padx=10, fill=tk.X)
+        tk.Label(prompt_frame, text="System Prompt:").pack(side=tk.TOP, anchor=tk.W)
+        self.system_prompt_entry = tk.Text(prompt_frame, height=10, width=40)
         self.system_prompt_entry.insert(tk.END, SYSTEM_PROMPT)
-        self.system_prompt_entry.pack(fill=tk.X, padx=10, pady=5)
+        self.system_prompt_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        self.send_button = tk.Button(prompt_frame, text="Send", command=self.send_prompt_action)
+        self.send_button.pack(side=tk.RIGHT, padx=5)
 
         # Horizontal slider frame
         slider_frame = tk.Frame(self)
@@ -237,7 +276,6 @@ class InfiniteOracleGUI(tk.Tk):
             try:
                 response = temp_session.post(OLLAMA_URL, json=payload, timeout=15)
                 response.raise_for_status()
-                print(f"Model '{model}' verified successfully.")
                 return True
             except requests.RequestException as e:
                 print(f"Model verification attempt {attempt + 1} failed: {e}")
@@ -267,6 +305,7 @@ class InfiniteOracleGUI(tk.Tk):
         self.is_running = True
         self.stop_event.clear()
         self.start_button.config(state=tk.DISABLED)
+        self.send_button.config(state=tk.DISABLED)  # Disable Send during Start
         self.stop_button.config(state=tk.NORMAL, bg="red")
         self.pitch_slider.config(state=tk.DISABLED)
         self.interval_slider.config(state=tk.DISABLED)
@@ -279,7 +318,7 @@ class InfiniteOracleGUI(tk.Tk):
         )
         self.tts_thread = threading.Thread(
             target=text_to_speech, 
-            args=(self.wisdom_queue, self.audio_queue, speaker_id, self.pitch_slider.get(), self.stop_event), 
+            args=(self.wisdom_queue, self.audio_queue, speaker_id, self.pitch_slider.get, self.stop_event), 
             daemon=True
         )
         self.playback_thread = threading.Thread(
@@ -324,14 +363,45 @@ class InfiniteOracleGUI(tk.Tk):
                 self.session = None
 
             self.start_button.config(state=tk.NORMAL)
+            self.send_button.config(state=tk.NORMAL)  # Re-enable Send on Stop
             self.stop_button.config(state=tk.NORMAL, bg="lightgray")
             self.pitch_slider.config(state=tk.NORMAL)
             self.interval_slider.config(state=tk.NORMAL)
             self.variation_slider.config(state=tk.NORMAL)
             print("Oracle stopped.")
 
+    def send_prompt_action(self):
+        global OLLAMA_URL, TTS_SERVER_URL
+        OLLAMA_URL = self.ollama_url_var.get()
+        model = self.model_var.get()
+        prompt = self.system_prompt_entry.get("1.0", tk.END).strip()
+        TTS_SERVER_URL = self.tts_url_var.get()
+        speaker_id = self.speaker_id_var.get()
+
+        if not all([OLLAMA_URL, model, prompt, TTS_SERVER_URL, speaker_id]):
+            messagebox.showwarning("Input Error", "Please fill all fields.")
+            return
+
+        send_session = setup_session(OLLAMA_URL)
+        if not self.verify_model(model):
+            send_session.close()
+            return
+
+        threading.Thread(
+            target=send_prompt,
+            args=(send_session, self.send_wisdom_queue, model, prompt),
+            daemon=True
+        ).start()
+
     def quit_app(self):
         self.stop_oracle()
+        self.send_stop_event.set()
+        if self.send_tts_thread:
+            self.send_tts_thread.join(timeout=1)
+        if self.send_playback_thread:
+            self.send_playback_thread.join(timeout=1)
+        if self.session:
+            self.session.close()
         sys.stdout = sys.__stdout__
         self.quit()
 
