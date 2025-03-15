@@ -144,8 +144,8 @@ def play_audio(audio_queue, stop_event, get_interval_func, get_variation_func, g
             wisdom, wav_path, pitch = audio_queue.get()
             with playback_lock:
                 if not stop_event.is_set():
-                    # Schedule GUI update asynchronously
-                    gui.after(0, lambda w=wisdom: gui.update_history(w))
+                    # Just print to console
+                    print(f"The Infinite Oracle speaks: {wisdom}")
                     audio = AudioSegment.from_wav(wav_path)
                     if pitch != 0:
                         octaves = pitch / 12.0
@@ -207,9 +207,13 @@ class InfiniteOracleGUI(tk.Tk):
         # Debug current working directory
         print(f"Current working directory: {os.getcwd()}")
 
-        # Set custom icon with PIL
+        # Set custom icon with PIL, using bundled resource
         try:
-            icon_path = r"C:\Users\wappy\OneDrive\Desktop\infinite_oracle\oracle.ico"
+            if getattr(sys, 'frozen', False):  # Running as .exe
+                base_path = sys._MEIPASS
+            else:  # Running as .py
+                base_path = os.path.dirname(__file__)
+            icon_path = os.path.join(base_path, "oracle.ico")
             img = Image.open(icon_path)
             icon = ImageTk.PhotoImage(img)
             self.iconphoto(True, icon)
@@ -235,7 +239,6 @@ class InfiniteOracleGUI(tk.Tk):
         self.send_stop_event = threading.Event()
         self.send_tts_thread = None
         self.send_playback_thread = None
-        self.wisdom_history = []
         self.send_enabled = True  # Flag to throttle Send button
 
         self.create_widgets()
@@ -307,9 +310,6 @@ class InfiniteOracleGUI(tk.Tk):
         tk.Label(self, text="Console Output:", bg="#2b2b2b", fg="white").pack(pady=5)
         self.console_text = scrolledtext.ScrolledText(self, height=15, width=70, state='disabled', bg="black", fg="green")
         self.console_text.pack(pady=5, padx=10, fill=tk.BOTH, expand=True)
-        tk.Label(self, text="Wisdom History:", bg="#2b2b2b", fg="white").pack(pady=5)
-        self.history_text = scrolledtext.ScrolledText(self, height=10, width=70, state='disabled', bg="black", fg="green")
-        self.history_text.pack(pady=5, padx=10, fill=tk.BOTH, expand=True)
 
     def enable_send_and_start(self):
         """Re-enable Send and Start buttons if not running."""
@@ -450,18 +450,6 @@ class InfiniteOracleGUI(tk.Tk):
             args=(send_session, self.send_wisdom_queue, model, prompt, self),
             daemon=True
         ).start()
-
-    def update_history(self, wisdom):
-        """Update the wisdom history and console display."""
-        print(f"The Infinite Oracle speaks: {wisdom}")
-        self.wisdom_history.append(wisdom)
-        if len(self.wisdom_history) > 50:
-            self.wisdom_history.pop(0)
-        self.history_text.configure(state='normal')
-        self.history_text.delete(1.0, tk.END)
-        self.history_text.insert(tk.END, "\n".join(self.wisdom_history))
-        self.history_text.see(tk.END)
-        self.history_text.configure(state='disabled')
 
 def main():
     app = InfiniteOracleGUI()
