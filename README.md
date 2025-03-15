@@ -23,26 +23,20 @@ Host Ollama and Coqui TTS on your Windows machine:
    ``ollama.exe pull llama3.2:latest``
 
    ``ollama.exe serve``
+4. Runs at `http://localhost:11434` by default.
 
-Runs at http://localhost:11434 by default.
+#### Coqui TTS
+1. Install [Docker Desktop](https://www.docker.com/products/docker-desktop) for Windows.
+2. Open a terminal and run:
+   ``docker run -it -p 5002:5002 --entrypoint /bin/bash ghcr.io/coqui-ai/tts``
+3. Inside the container:
+   ``python3 TTS/server/server.py --model_name tts_models/en/ljspeech/tacotron2-DDC``
+4. Access at `http://localhost:5002`.
 
-Coqui TTS
-Install Docker Desktop for Windows.
+### Installation
+1. Download the latest `InfiniteOracle.exe` from the [Releases](https://github.com/yourusername/infinite-oracle/releases) page.
+2. Place it in a folder of your choice (e.g., `C:\InfiniteOracle`).
 
-Open a terminal and run:
-
-``docker run -it -p 5002:5002 --entrypoint /bin/bash ghcr.io/coqui-ai/tts``
-
-Inside the container: ``python3 TTS/server/server.py --model_name tts_models/en/ljspeech/tacotron2-DDC``
-
-Access at http://localhost:5002.
-
-Installation
-Download the latest InfiniteOracle.exe from the Releases page.
-
-Place it in a folder of your choice (e.g., C:\InfiniteOracle).
-
-Usage
-Ensure Ollama (http://localhost:11434) and Coqui TTS (http://localhost:5002) are running.
-
-Double-click InfiniteOracle.exe to launch.
+### Usage
+1. Ensure Ollama (`http://localhost:11434`) and Coqui TTS (`http://localhost:5002`) are running.
+2. Double-click `InfiniteOracle.exe` to launch.
