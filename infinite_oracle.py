@@ -94,7 +94,7 @@ def send_prompt(session, wisdom_queue, model, prompt, gui):
         logger.error(f"Ollama connection error: {e}")
     finally:
         session.close()
-        gui.after(0, lambda: gui.enable_send_and_start())  # Re-enable buttons
+        gui.after(0, lambda: gui.enable_send_and_start())
 
 def text_to_speech(wisdom_queue, audio_queue, speaker_id, pitch_func, stop_event):
     """Convert wisdom to speech using Coqui TTS and queue audio files."""
@@ -144,7 +144,6 @@ def play_audio(audio_queue, stop_event, get_interval_func, get_variation_func, g
             wisdom, wav_path, pitch = audio_queue.get()
             with playback_lock:
                 if not stop_event.is_set():
-                    # Just print to console
                     print(f"The Infinite Oracle speaks: {wisdom}")
                     audio = AudioSegment.from_wav(wav_path)
                     if pitch != 0:
@@ -204,14 +203,12 @@ class InfiniteOracleGUI(tk.Tk):
         self.state("zoomed")
         self.geometry("800x900")
 
-        # Debug current working directory
         print(f"Current working directory: {os.getcwd()}")
 
-        # Set custom icon with PIL, using bundled resource
         try:
-            if getattr(sys, 'frozen', False):  # Running as .exe
+            if getattr(sys, 'frozen', False):
                 base_path = sys._MEIPASS
-            else:  # Running as .py
+            else:
                 base_path = os.path.dirname(__file__)
             icon_path = os.path.join(base_path, "oracle.ico")
             img = Image.open(icon_path)
@@ -230,7 +227,7 @@ class InfiniteOracleGUI(tk.Tk):
         self.wisdom_queue = queue.Queue(maxsize=10)
         self.audio_queue = queue.Queue(maxsize=10)
         self.is_running = False
-        self.start_lock = False  # Lock to prevent Start spam
+        self.start_lock = False
         self.stop_event = threading.Event()
         self.generator_thread = None
         self.tts_thread = None
@@ -240,12 +237,11 @@ class InfiniteOracleGUI(tk.Tk):
         self.send_stop_event = threading.Event()
         self.send_tts_thread = None
         self.send_playback_thread = None
-        self.send_enabled = True  # Flag to throttle Send button
+        self.send_enabled = True
 
         self.create_widgets()
         sys.stdout = ConsoleRedirector(self.console_text)
 
-        # Start persistent Send threads
         self.send_tts_thread = threading.Thread(
             target=text_to_speech,
             args=(self.send_wisdom_queue, self.send_audio_queue, self.speaker_id_var.get(), self.pitch_slider.get, self.send_stop_event),
@@ -317,6 +313,18 @@ class InfiniteOracleGUI(tk.Tk):
         self.console_text = scrolledtext.ScrolledText(self, height=15, width=70, state='disabled', bg="black", fg="green")
         self.console_text.pack(pady=5, padx=10, fill=tk.BOTH, expand=True)
 
+    def disable_controls(self):
+        """Immediately disable all interactive controls."""
+        self.start_button.config(state=tk.DISABLED)
+        self.send_button.config(state=tk.DISABLED)
+        self.save_button.config(state=tk.DISABLED)
+        self.ollama_url_entry.config(state=tk.DISABLED)
+        self.model_entry.config(state=tk.DISABLED)
+        self.tts_url_entry.config(state=tk.DISABLED)
+        self.speaker_id_entry.config(state=tk.DISABLED)
+        self.system_prompt_entry.config(state=tk.DISABLED)
+        self.update()  # Force Tkinter to update the UI immediately
+
     def enable_send_and_start(self):
         """Re-enable Send, Start, Save Config, and text inputs if not running."""
         if not self.is_running and not self.start_lock:
@@ -331,9 +339,11 @@ class InfiniteOracleGUI(tk.Tk):
         self.send_enabled = True
 
     def save_config_action(self):
-        """Wrapper for save_config to prevent overlap with Start."""
-        if not self.start_lock:
-            save_config(self)
+        """Debounced save config to avoid overlap."""
+        if not self.start_lock and self.send_enabled:
+            self.disable_controls()  # Grey out immediately
+            self.after(100, lambda: save_config(self))  # Small delay to ensure stability
+            self.after(150, self.enable_send_and_start)  # Re-enable after save
 
     def verify_model(self, model):
         temp_session = setup_session(OLLAMA_URL)
@@ -352,16 +362,9 @@ class InfiniteOracleGUI(tk.Tk):
 
     def start_oracle(self):
         if self.start_lock or self.is_running:
-            return  # Ignore if already starting or running
-        self.start_lock = True  # Lock to prevent spam
-        self.start_button.config(state=tk.DISABLED)
-        self.send_button.config(state=tk.DISABLED)
-        self.save_button.config(state=tk.DISABLED)
-        self.ollama_url_entry.config(state=tk.DISABLED)
-        self.model_entry.config(state=tk.DISABLED)
-        self.tts_url_entry.config(state=tk.DISABLED)
-        self.speaker_id_entry.config(state=tk.DISABLED)
-        self.system_prompt_entry.config(state=tk.DISABLED)
+            return
+        self.start_lock = True
+        self.disable_controls()  # Grey out immediately
 
         global OLLAMA_URL, SYSTEM_PROMPT, TTS_SERVER_URL
         OLLAMA_URL = self.ollama_url_var.get()
@@ -411,8 +414,7 @@ class InfiniteOracleGUI(tk.Tk):
         self.tts_thread.start()
         self.playback_thread.start()
 
-        # Unlock after threads are running
-        self.after(500, lambda: setattr(self, 'start_lock', False))  # 500ms debounce
+        self.after(500, lambda: setattr(self, 'start_lock', False))
 
     def stop_oracle(self):
         if self.is_running:
@@ -461,16 +463,9 @@ class InfiniteOracleGUI(tk.Tk):
 
     def send_prompt_action(self):
         if not self.send_enabled or self.start_lock:
-            return  # Ignore if throttled or starting
+            return
         self.send_enabled = False
-        self.send_button.config(state=tk.DISABLED)
-        self.start_button.config(state=tk.DISABLED)
-        self.save_button.config(state=tk.DISABLED)
-        self.ollama_url_entry.config(state=tk.DISABLED)
-        self.model_entry.config(state=tk.DISABLED)
-        self.tts_url_entry.config(state=tk.DISABLED)
-        self.speaker_id_entry.config(state=tk.DISABLED)
-        self.system_prompt_entry.config(state=tk.DISABLED)
+        self.disable_controls()  # Grey out immediately
 
         global OLLAMA_URL, TTS_SERVER_URL
         OLLAMA_URL = self.ollama_url_var.get()
