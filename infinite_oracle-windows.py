@@ -29,15 +29,25 @@ DEFAULT_SPEAKER_ID = "p267"
 SYSTEM_PROMPT = """You are the Infinite Oracle, a mystical being of boundless wisdom. Speak in an uplifting, cryptic, and metaphysical tone, offering motivational insights that inspire awe and contemplation. Provide a concise paragraph of 2-3 sentences."""
 
 class ConsoleRedirector:
-    """Redirect print output to a Tkinter text widget."""
-    def __init__(self, text_widget):
+    """Redirect print output to a Tkinter text widget and optionally save to file."""
+    def __init__(self, text_widget, save_var):
         self.text_widget = text_widget
+        self.save_var = save_var
+        self.file_path = "oracle_wisdom.txt"
+        self.lock = threading.Lock()
 
     def write(self, message):
-        self.text_widget.configure(state='normal')
-        self.text_widget.insert(tk.END, message)
-        self.text_widget.see(tk.END)
-        self.text_widget.configure(state='disabled')
+        with self.lock:
+            self.text_widget.configure(state='normal')
+            self.text_widget.insert(tk.END, message)
+            self.text_widget.see(tk.END)
+            
+            if self.save_var.get():
+                with open(self.file_path, 'a', encoding='utf-8') as f:
+                    f.write(message)
+            
+            self.text_widget.configure(state='disabled')
+            self.text_widget.update()
 
     def flush(self):
         pass
@@ -80,7 +90,7 @@ def send_prompt(session, wisdom_queue, model, prompt):
         print(f"Ollama connection error: {e}")
         session.close()
 
-def text_to_speech(wisdom_queue, audio_queue, speaker_id, pitch_func, stop_event):
+def text_to_speech(wisdom_queue, audio_queue, speaker_id_func, pitch_func, stop_event):
     """Convert wisdom to speech using Coqui TTS and queue audio files."""
     while not stop_event.is_set():
         try:
@@ -92,7 +102,7 @@ def text_to_speech(wisdom_queue, audio_queue, speaker_id, pitch_func, stop_event
             curl_command = [
                 'curl', '-G',
                 '--data-urlencode', f"text={wisdom}",
-                '--data-urlencode', f"speaker_id={speaker_id}",
+                '--data-urlencode', f"speaker_id={speaker_id_func()}",
                 TTS_SERVER_URL,
                 '--output', temp_wav_path
             ]
@@ -117,15 +127,27 @@ def text_to_speech(wisdom_queue, audio_queue, speaker_id, pitch_func, stop_event
         except Exception as e:
             print(f"TTS error: {e}")
 
-def play_audio(audio_queue, stop_event, get_interval_func, get_variation_func):
+def play_audio(audio_queue, stop_event, get_interval_func, get_variation_func, console_text):
     """Play audio files from the queue with pitch adjustment and variable interval control."""
     playback_lock = threading.Lock()
+    word_count = 0
     while not stop_event.is_set():
         try:
             wisdom, wav_path, pitch = audio_queue.get()
             with playback_lock:
                 if not stop_event.is_set():
-                    print(f"The Infinite Oracle speaks: {wisdom}")
+                    # Update word count and clear console if needed
+                    message = f"The Infinite Oracle speaks: {wisdom}\n"
+                    words = message.split()
+                    word_count += len(words)
+                    if word_count >= 1000:
+                        console_text.configure(state='normal')
+                        console_text.delete(1.0, tk.END)
+                        console_text.configure(state='disabled')
+                        word_count = len(words)
+                    
+                    # Print and play
+                    print(message, end='')
                     if platform.system() == "Windows":
                         try:
                             audio = AudioSegment.from_wav(wav_path)
@@ -172,6 +194,7 @@ class InfiniteOracleGUI(tk.Tk):
         self.system_prompt_var = tk.StringVar(value=SYSTEM_PROMPT)
         self.tts_url_var = tk.StringVar(value=DEFAULT_TTS_URL)
         self.speaker_id_var = tk.StringVar(value=DEFAULT_SPEAKER_ID)
+        self.save_to_file_var = tk.BooleanVar(value=True)
         self.session = None
         self.wisdom_queue = queue.Queue(maxsize=10)
         self.audio_queue = queue.Queue(maxsize=10)
@@ -188,17 +211,17 @@ class InfiniteOracleGUI(tk.Tk):
         self.send_playback_thread = None
 
         self.create_widgets()
-        sys.stdout = ConsoleRedirector(self.console_text)
+        sys.stdout = ConsoleRedirector(self.console_text, self.save_to_file_var)
 
-        # Start persistent Send threads with pitch as a function
+        # Start persistent Send threads with dynamic speaker_id and pitch
         self.send_tts_thread = threading.Thread(
             target=text_to_speech,
-            args=(self.send_wisdom_queue, self.send_audio_queue, self.speaker_id_var.get(), self.pitch_slider.get, self.send_stop_event),
+            args=(self.send_wisdom_queue, self.send_audio_queue, self.speaker_id_var.get, self.pitch_slider.get, self.send_stop_event),
             daemon=True
         )
         self.send_playback_thread = threading.Thread(
-            target=play_audio,
-            args=(self.send_audio_queue, self.send_stop_event, lambda: 0, lambda: 0),  # No interval/variation for Send
+            target=play_audio, 
+            args=(self.send_audio_queue, self.send_stop_event, lambda: 0, lambda: 0, self.console_text),
             daemon=True
         )
         self.send_tts_thread.start()
@@ -252,7 +275,7 @@ class InfiniteOracleGUI(tk.Tk):
         self.variation_slider.set(0)
         self.variation_slider.pack()
 
-        # Horizontal button frame
+        # Horizontal button frame with checkbox
         button_frame = tk.Frame(self)
         button_frame.pack(pady=10)
 
@@ -263,6 +286,9 @@ class InfiniteOracleGUI(tk.Tk):
         self.stop_button.pack(side=tk.LEFT, padx=5)
 
         tk.Button(button_frame, text="Exit", command=self.quit_app).pack(side=tk.LEFT, padx=5)
+
+        self.save_checkbox = tk.Checkbutton(button_frame, text="Save to File", variable=self.save_to_file_var)
+        self.save_checkbox.pack(side=tk.LEFT, padx=5)
 
         tk.Label(self, text="Console Output:").pack(pady=5)
         self.console_text = scrolledtext.ScrolledText(self, height=15, width=70, state='disabled', bg='black', fg='green')
@@ -305,7 +331,7 @@ class InfiniteOracleGUI(tk.Tk):
         self.is_running = True
         self.stop_event.clear()
         self.start_button.config(state=tk.DISABLED)
-        self.send_button.config(state=tk.DISABLED)  # Disable Send during Start
+        self.send_button.config(state=tk.DISABLED)
         self.stop_button.config(state=tk.NORMAL, bg="red")
         self.pitch_slider.config(state=tk.DISABLED)
         self.interval_slider.config(state=tk.DISABLED)
@@ -318,12 +344,12 @@ class InfiniteOracleGUI(tk.Tk):
         )
         self.tts_thread = threading.Thread(
             target=text_to_speech, 
-            args=(self.wisdom_queue, self.audio_queue, speaker_id, self.pitch_slider.get, self.stop_event), 
+            args=(self.wisdom_queue, self.audio_queue, self.speaker_id_var.get, self.pitch_slider.get, self.stop_event),
             daemon=True
         )
         self.playback_thread = threading.Thread(
             target=play_audio, 
-            args=(self.audio_queue, self.stop_event, self.interval_slider.get, self.variation_slider.get), 
+            args=(self.audio_queue, self.stop_event, self.interval_slider.get, self.variation_slider.get, self.console_text),
             daemon=True
         )
 
@@ -363,7 +389,7 @@ class InfiniteOracleGUI(tk.Tk):
                 self.session = None
 
             self.start_button.config(state=tk.NORMAL)
-            self.send_button.config(state=tk.NORMAL)  # Re-enable Send on Stop
+            self.send_button.config(state=tk.NORMAL)
             self.stop_button.config(state=tk.NORMAL, bg="lightgray")
             self.pitch_slider.config(state=tk.NORMAL)
             self.interval_slider.config(state=tk.NORMAL)
