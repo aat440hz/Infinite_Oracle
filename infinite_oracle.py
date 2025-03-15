@@ -91,13 +91,13 @@ def send_prompt(session, wisdom_queue, model, prompt, gui):
         if wisdom:
             wisdom_queue.put(wisdom)
     except requests.RequestException as e:
-        logger.error(f"Ollama connection error: {e}")
+        logger.error(f"Ollama connection error in send_prompt: {e}")
     finally:
         session.close()
         gui.after(0, lambda: gui.enable_send_and_start())
 
-def text_to_speech(wisdom_queue, audio_queue, speaker_id, pitch_func, stop_event):
-    """Convert wisdom to speech using Coqui TTS and queue audio files."""
+def text_to_speech(wisdom_queue, audio_queue, get_speaker_id_func, pitch_func, stop_event):
+    """Convert wisdom to speech using Coqui TTS and queue audio files, dynamically fetching speaker_id."""
     while not stop_event.is_set():
         try:
             wisdom = wisdom_queue.get(timeout=5)
@@ -105,6 +105,7 @@ def text_to_speech(wisdom_queue, audio_queue, speaker_id, pitch_func, stop_event
             temp_wav_path = temp_wav_file.name
             temp_wav_file.close()
 
+            speaker_id = get_speaker_id_func()  # Dynamically get the current speaker_id
             curl_command = [
                 'curl', '-G',
                 '--data-urlencode', f"text={wisdom}",
@@ -112,30 +113,33 @@ def text_to_speech(wisdom_queue, audio_queue, speaker_id, pitch_func, stop_event
                 TTS_SERVER_URL,
                 '--output', temp_wav_path
             ]
-            subprocess.run(
-                curl_command,
-                check=True,
-                capture_output=True,
-                text=True,
-                creationflags=subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0
-            )
+            try:
+                subprocess.run(
+                    curl_command,
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                    creationflags=subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0
+                )
+            except subprocess.CalledProcessError as e:
+                logger.error(f"TTS server error at '{TTS_SERVER_URL}' with speaker_id '{speaker_id}': {e}")
+                os.remove(temp_wav_path)
+                wisdom_queue.task_done()
+                continue
 
             if os.path.exists(temp_wav_path) and os.path.getsize(temp_wav_path) > 0 and not stop_event.is_set():
                 audio_queue.put((wisdom, temp_wav_path, pitch_func()))
             else:
                 os.remove(temp_wav_path)
-                logger.warning("TTS failed: No valid audio file generated.")
+                logger.warning(f"TTS failed for speaker_id '{speaker_id}': No valid audio file generated.")
             wisdom_queue.task_done()
         except queue.Empty:
             continue
-        except subprocess.CalledProcessError as e:
-            logger.error(f"curl error: {e}")
-            if os.path.exists(temp_wav_path):
-                os.remove(temp_wav_path)
         except Exception as e:
-            logger.error(f"TTS error: {e}")
+            logger.error(f"Unexpected TTS error: {e}")
             if os.path.exists(temp_wav_path):
                 os.remove(temp_wav_path)
+            wisdom_queue.task_done()
 
 def play_audio(audio_queue, stop_event, get_interval_func, get_variation_func, gui):
     """Play audio files from the queue with pitch adjustment and update GUI."""
@@ -242,9 +246,10 @@ class InfiniteOracleGUI(tk.Tk):
         self.create_widgets()
         sys.stdout = ConsoleRedirector(self.console_text)
 
+        # Pass a lambda to get the current speaker_id dynamically
         self.send_tts_thread = threading.Thread(
             target=text_to_speech,
-            args=(self.send_wisdom_queue, self.send_audio_queue, self.speaker_id_var.get(), self.pitch_slider.get, self.send_stop_event),
+            args=(self.send_wisdom_queue, self.send_audio_queue, lambda: self.speaker_id_var.get(), self.pitch_slider.get, self.send_stop_event),
             daemon=True
         )
         self.send_playback_thread = threading.Thread(
@@ -323,7 +328,7 @@ class InfiniteOracleGUI(tk.Tk):
         self.tts_url_entry.config(state=tk.DISABLED)
         self.speaker_id_entry.config(state=tk.DISABLED)
         self.system_prompt_entry.config(state=tk.DISABLED)
-        self.update()  # Force Tkinter to update the UI immediately
+        self.update()
 
     def enable_send_and_start(self):
         """Re-enable Send, Start, Save Config, and text inputs if not running."""
@@ -336,14 +341,15 @@ class InfiniteOracleGUI(tk.Tk):
             self.tts_url_entry.config(state=tk.NORMAL)
             self.speaker_id_entry.config(state=tk.NORMAL)
             self.system_prompt_entry.config(state=tk.NORMAL)
-        self.send_enabled = True
+            self.send_enabled = True
+        self.update()
 
     def save_config_action(self):
         """Debounced save config to avoid overlap."""
         if not self.start_lock and self.send_enabled:
-            self.disable_controls()  # Grey out immediately
-            self.after(100, lambda: save_config(self))  # Small delay to ensure stability
-            self.after(150, self.enable_send_and_start)  # Re-enable after save
+            self.disable_controls()
+            self.after(100, lambda: save_config(self))
+            self.after(150, self.enable_send_and_start)
 
     def verify_model(self, model):
         temp_session = setup_session(OLLAMA_URL)
@@ -357,14 +363,14 @@ class InfiniteOracleGUI(tk.Tk):
                 logger.error(f"Model verification attempt {attempt + 1} failed: {e}")
                 if attempt < 2:
                     time.sleep(2)
-        messagebox.showerror("Model Error", f"Model '{model}' not found or unavailable on Ollama server after retries.")
+        messagebox.showerror("Model Error", f"Model '{model}' not found or unavailable on Ollama server at '{OLLAMA_URL}' after retries.")
         return False
 
     def start_oracle(self):
         if self.start_lock or self.is_running:
             return
         self.start_lock = True
-        self.disable_controls()  # Grey out immediately
+        self.disable_controls()
 
         global OLLAMA_URL, SYSTEM_PROMPT, TTS_SERVER_URL
         OLLAMA_URL = self.ollama_url_var.get()
@@ -401,7 +407,7 @@ class InfiniteOracleGUI(tk.Tk):
         )
         self.tts_thread = threading.Thread(
             target=text_to_speech,
-            args=(self.wisdom_queue, self.audio_queue, speaker_id, self.pitch_slider.get, self.stop_event),
+            args=(self.wisdom_queue, self.audio_queue, lambda: self.speaker_id_var.get(), self.pitch_slider.get, self.stop_event),
             daemon=True
         )
         self.playback_thread = threading.Thread(
@@ -465,7 +471,7 @@ class InfiniteOracleGUI(tk.Tk):
         if not self.send_enabled or self.start_lock:
             return
         self.send_enabled = False
-        self.disable_controls()  # Grey out immediately
+        self.disable_controls()
 
         global OLLAMA_URL, TTS_SERVER_URL
         OLLAMA_URL = self.ollama_url_var.get()
@@ -476,13 +482,15 @@ class InfiniteOracleGUI(tk.Tk):
 
         if not all([OLLAMA_URL, model, prompt, TTS_SERVER_URL, speaker_id]):
             messagebox.showwarning("Input Error", "Please fill all fields.")
+            self.send_enabled = True
             self.enable_send_and_start()
             return
 
         send_session = setup_session(OLLAMA_URL)
         if not self.verify_model(model):
             send_session.close()
-            self.enable_send_and_start()
+            self.send_enabled = True
+            self.after(0, self.enable_send_and_start)
             return
 
         threading.Thread(
