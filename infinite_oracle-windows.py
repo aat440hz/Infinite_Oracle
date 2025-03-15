@@ -228,17 +228,22 @@ class InfiniteOracleGUI(tk.Tk):
         self.send_playback_thread.start()
 
     def create_widgets(self):
+        # Store references to the widgets we want to disable
         tk.Label(self, text="Ollama Server URL:").pack(pady=5)
-        tk.Entry(self, textvariable=self.ollama_url_var, width=40).pack(pady=5)
+        self.ollama_url_entry = tk.Entry(self, textvariable=self.ollama_url_var, width=40)
+        self.ollama_url_entry.pack(pady=5)
 
         tk.Label(self, text="Model Name:").pack(pady=5)
-        tk.Entry(self, textvariable=self.model_var, width=40).pack(pady=5)
+        self.model_entry = tk.Entry(self, textvariable=self.model_var, width=40)
+        self.model_entry.pack(pady=5)
 
         tk.Label(self, text="Coqui TTS Server URL:").pack(pady=5)
-        tk.Entry(self, textvariable=self.tts_url_var, width=40).pack(pady=5)
+        self.tts_url_entry = tk.Entry(self, textvariable=self.tts_url_var, width=40)
+        self.tts_url_entry.pack(pady=5)
 
         tk.Label(self, text="Speaker ID (e.g., p267):").pack(pady=5)
-        tk.Entry(self, textvariable=self.speaker_id_var, width=40).pack(pady=5)
+        self.speaker_id_entry = tk.Entry(self, textvariable=self.speaker_id_var, width=40)
+        self.speaker_id_entry.pack(pady=5)
 
         # System prompt frame with Send button
         prompt_frame = tk.Frame(self)
@@ -294,6 +299,22 @@ class InfiniteOracleGUI(tk.Tk):
         self.console_text = scrolledtext.ScrolledText(self, height=15, width=70, state='disabled', bg='black', fg='green')
         self.console_text.pack(pady=5, padx=10, fill=tk.BOTH, expand=True)
 
+    def disable_input_fields(self):
+        """Disable all input fields to prevent editing."""
+        self.ollama_url_entry.config(state=tk.DISABLED)
+        self.model_entry.config(state=tk.DISABLED)
+        self.tts_url_entry.config(state=tk.DISABLED)
+        self.speaker_id_entry.config(state=tk.DISABLED)
+        self.system_prompt_entry.config(state=tk.DISABLED)
+
+    def enable_input_fields(self):
+        """Enable all input fields for editing."""
+        self.ollama_url_entry.config(state=tk.NORMAL)
+        self.model_entry.config(state=tk.NORMAL)
+        self.tts_url_entry.config(state=tk.NORMAL)
+        self.speaker_id_entry.config(state=tk.NORMAL)
+        self.system_prompt_entry.config(state=tk.NORMAL)
+
     def verify_model(self, model):
         """Verify the model exists on the Ollama server with retries."""
         temp_session = setup_session(OLLAMA_URL)
@@ -336,6 +357,7 @@ class InfiniteOracleGUI(tk.Tk):
         self.pitch_slider.config(state=tk.DISABLED)
         self.interval_slider.config(state=tk.DISABLED)
         self.variation_slider.config(state=tk.DISABLED)
+        self.disable_input_fields()  # Disable input fields
 
         self.generator_thread = threading.Thread(
             target=generate_wisdom, 
@@ -394,6 +416,7 @@ class InfiniteOracleGUI(tk.Tk):
             self.pitch_slider.config(state=tk.NORMAL)
             self.interval_slider.config(state=tk.NORMAL)
             self.variation_slider.config(state=tk.NORMAL)
+            self.enable_input_fields()  # Re-enable input fields
             print("Oracle stopped.")
 
     def send_prompt_action(self):
@@ -413,9 +436,18 @@ class InfiniteOracleGUI(tk.Tk):
             send_session.close()
             return
 
+        self.disable_input_fields()  # Disable input fields during send
+        self.start_button.config(state=tk.DISABLED)  # Prevent Start during Send
+        self.send_button.config(state=tk.DISABLED)
+
+        def send_and_cleanup():
+            send_prompt(send_session, self.send_wisdom_queue, model, prompt)
+            self.enable_input_fields()  # Re-enable fields after send completes
+            self.start_button.config(state=tk.NORMAL)
+            self.send_button.config(state=tk.NORMAL)
+
         threading.Thread(
-            target=send_prompt,
-            args=(send_session, self.send_wisdom_queue, model, prompt),
+            target=send_and_cleanup,
             daemon=True
         ).start()
 
