@@ -230,6 +230,7 @@ class InfiniteOracleGUI(tk.Tk):
         self.wisdom_queue = queue.Queue(maxsize=10)
         self.audio_queue = queue.Queue(maxsize=10)
         self.is_running = False
+        self.start_lock = False  # Lock to prevent Start spam
         self.stop_event = threading.Event()
         self.generator_thread = None
         self.tts_thread = None
@@ -261,13 +262,17 @@ class InfiniteOracleGUI(tk.Tk):
     def create_widgets(self):
         self.configure(bg="#2b2b2b")
         tk.Label(self, text="Ollama Server URL:", bg="#2b2b2b", fg="white").pack(pady=5)
-        tk.Entry(self, textvariable=self.ollama_url_var, width=40).pack(pady=5)
+        self.ollama_url_entry = tk.Entry(self, textvariable=self.ollama_url_var, width=40)
+        self.ollama_url_entry.pack(pady=5)
         tk.Label(self, text="Model Name:", bg="#2b2b2b", fg="white").pack(pady=5)
-        tk.Entry(self, textvariable=self.model_var, width=40).pack(pady=5)
+        self.model_entry = tk.Entry(self, textvariable=self.model_var, width=40)
+        self.model_entry.pack(pady=5)
         tk.Label(self, text="Coqui TTS Server URL:", bg="#2b2b2b", fg="white").pack(pady=5)
-        tk.Entry(self, textvariable=self.tts_url_var, width=40).pack(pady=5)
+        self.tts_url_entry = tk.Entry(self, textvariable=self.tts_url_var, width=40)
+        self.tts_url_entry.pack(pady=5)
         tk.Label(self, text="Speaker ID (e.g., p267):", bg="#2b2b2b", fg="white").pack(pady=5)
-        tk.Entry(self, textvariable=self.speaker_id_var, width=40).pack(pady=5)
+        self.speaker_id_entry = tk.Entry(self, textvariable=self.speaker_id_var, width=40)
+        self.speaker_id_entry.pack(pady=5)
 
         prompt_frame = tk.Frame(self, bg="#2b2b2b")
         prompt_frame.pack(pady=5, padx=10, fill=tk.X)
@@ -305,18 +310,30 @@ class InfiniteOracleGUI(tk.Tk):
         self.start_button.pack(side=tk.LEFT, padx=5)
         self.stop_button = tk.Button(button_frame, text="Stop", command=self.stop_oracle)
         self.stop_button.pack(side=tk.LEFT, padx=5)
-        tk.Button(button_frame, text="Save Config", command=lambda: save_config(self)).pack(side=tk.LEFT, padx=5)
+        self.save_button = tk.Button(button_frame, text="Save Config", command=self.save_config_action)
+        self.save_button.pack(side=tk.LEFT, padx=5)
 
         tk.Label(self, text="Console Output:", bg="#2b2b2b", fg="white").pack(pady=5)
         self.console_text = scrolledtext.ScrolledText(self, height=15, width=70, state='disabled', bg="black", fg="green")
         self.console_text.pack(pady=5, padx=10, fill=tk.BOTH, expand=True)
 
     def enable_send_and_start(self):
-        """Re-enable Send and Start buttons if not running."""
-        if not self.is_running:
+        """Re-enable Send, Start, Save Config, and text inputs if not running."""
+        if not self.is_running and not self.start_lock:
             self.send_button.config(state=tk.NORMAL)
             self.start_button.config(state=tk.NORMAL)
+            self.save_button.config(state=tk.NORMAL)
+            self.ollama_url_entry.config(state=tk.NORMAL)
+            self.model_entry.config(state=tk.NORMAL)
+            self.tts_url_entry.config(state=tk.NORMAL)
+            self.speaker_id_entry.config(state=tk.NORMAL)
+            self.system_prompt_entry.config(state=tk.NORMAL)
         self.send_enabled = True
+
+    def save_config_action(self):
+        """Wrapper for save_config to prevent overlap with Start."""
+        if not self.start_lock:
+            save_config(self)
 
     def verify_model(self, model):
         temp_session = setup_session(OLLAMA_URL)
@@ -334,6 +351,18 @@ class InfiniteOracleGUI(tk.Tk):
         return False
 
     def start_oracle(self):
+        if self.start_lock or self.is_running:
+            return  # Ignore if already starting or running
+        self.start_lock = True  # Lock to prevent spam
+        self.start_button.config(state=tk.DISABLED)
+        self.send_button.config(state=tk.DISABLED)
+        self.save_button.config(state=tk.DISABLED)
+        self.ollama_url_entry.config(state=tk.DISABLED)
+        self.model_entry.config(state=tk.DISABLED)
+        self.tts_url_entry.config(state=tk.DISABLED)
+        self.speaker_id_entry.config(state=tk.DISABLED)
+        self.system_prompt_entry.config(state=tk.DISABLED)
+
         global OLLAMA_URL, SYSTEM_PROMPT, TTS_SERVER_URL
         OLLAMA_URL = self.ollama_url_var.get()
         model = self.model_var.get()
@@ -343,18 +372,20 @@ class InfiniteOracleGUI(tk.Tk):
 
         if not all([OLLAMA_URL, model, TTS_SERVER_URL, speaker_id]):
             messagebox.showerror("Input Error", "Please fill all fields.")
+            self.start_lock = False
+            self.after(0, self.enable_send_and_start)
             return
 
         self.stop_oracle()
 
         if not self.verify_model(model):
+            self.start_lock = False
+            self.after(0, self.enable_send_and_start)
             return
 
         self.session = setup_session(OLLAMA_URL)
         self.is_running = True
         self.stop_event.clear()
-        self.start_button.config(state=tk.DISABLED)
-        self.send_button.config(state=tk.DISABLED)
         self.stop_button.config(state=tk.NORMAL, bg="red")
         self.pitch_slider.config(state=tk.DISABLED)
         self.interval_slider.config(state=tk.DISABLED)
@@ -379,6 +410,9 @@ class InfiniteOracleGUI(tk.Tk):
         self.generator_thread.start()
         self.tts_thread.start()
         self.playback_thread.start()
+
+        # Unlock after threads are running
+        self.after(500, lambda: setattr(self, 'start_lock', False))  # 500ms debounce
 
     def stop_oracle(self):
         if self.is_running:
@@ -413,6 +447,12 @@ class InfiniteOracleGUI(tk.Tk):
 
             self.start_button.config(state=tk.NORMAL)
             self.send_button.config(state=tk.NORMAL)
+            self.save_button.config(state=tk.NORMAL)
+            self.ollama_url_entry.config(state=tk.NORMAL)
+            self.model_entry.config(state=tk.NORMAL)
+            self.tts_url_entry.config(state=tk.NORMAL)
+            self.speaker_id_entry.config(state=tk.NORMAL)
+            self.system_prompt_entry.config(state=tk.NORMAL)
             self.stop_button.config(state=tk.NORMAL, bg="lightgray")
             self.pitch_slider.config(state=tk.NORMAL)
             self.interval_slider.config(state=tk.NORMAL)
@@ -420,12 +460,17 @@ class InfiniteOracleGUI(tk.Tk):
             logger.info("Oracle stopped.")
 
     def send_prompt_action(self):
-        if not self.send_enabled:
-            return  # Ignore if Send is throttled
+        if not self.send_enabled or self.start_lock:
+            return  # Ignore if throttled or starting
         self.send_enabled = False
         self.send_button.config(state=tk.DISABLED)
-        if not self.is_running:
-            self.start_button.config(state=tk.DISABLED)
+        self.start_button.config(state=tk.DISABLED)
+        self.save_button.config(state=tk.DISABLED)
+        self.ollama_url_entry.config(state=tk.DISABLED)
+        self.model_entry.config(state=tk.DISABLED)
+        self.tts_url_entry.config(state=tk.DISABLED)
+        self.speaker_id_entry.config(state=tk.DISABLED)
+        self.system_prompt_entry.config(state=tk.DISABLED)
 
         global OLLAMA_URL, TTS_SERVER_URL
         OLLAMA_URL = self.ollama_url_var.get()
