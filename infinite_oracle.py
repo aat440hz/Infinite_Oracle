@@ -200,6 +200,19 @@ def text_to_speech(wisdom_queue, audio_queue, get_speaker_id_func, pitch_func, s
                 os.remove(temp_wav_path)
             wisdom_queue.task_done()
 
+def apply_reverb(audio, reverb_value):
+    """Custom reverb effect: overlay a delayed, attenuated copy of the audio."""
+    if reverb_value <= 0:
+        return audio
+    reverb_factor = reverb_value / 5.0
+    delay_ms = 20 + (reverb_factor * 40)  # 20-60ms
+    gain_db = -20 + (reverb_factor * 8)   # -20 to -12dB
+    echo = audio[:].fade_in(10).fade_out(50)
+    echo = echo - abs(gain_db)
+    silence = AudioSegment.silent(duration=int(delay_ms))
+    reverb_audio = audio.overlay(silence + echo)
+    return reverb_audio
+
 def play_audio(audio_queue, stop_event, get_interval_func, get_variation_func, gui, is_start_mode=False):
     if getattr(sys, 'frozen', False):
         ffmpeg_path = os.path.join(sys._MEIPASS, "ffmpeg", "ffmpeg.exe")
@@ -216,8 +229,11 @@ def play_audio(audio_queue, stop_event, get_interval_func, get_variation_func, g
                         new_sample_rate = int(audio.frame_rate * (2.0 ** octaves))
                         audio = audio._spawn(audio.raw_data, overrides={"frame_rate": new_sample_rate})
                         audio = audio.set_frame_rate(22050)
+                    reverb_value = gui.reverb_slider.get()
+                    if reverb_value > 0:
+                        audio = apply_reverb(audio, reverb_value)
                     audio = normalize(audio)
-                    logger.info(f"Playing audio for: {wisdom[:50]}...")
+                    logger.info(f"Playing audio for: {wisdom[:50]}... (Pitch: {pitch}, Reverb: {reverb_value})")
                     play(audio)
             os.remove(wav_path)
             audio_queue.task_done()
@@ -240,6 +256,7 @@ def load_config():
             "tts_url": DEFAULT_TTS_URL,
             "speaker_id": DEFAULT_SPEAKER_ID,
             "pitch": 0,
+            "reverb": 0,
             "interval": 2.0,
             "variation": 0,
             "request_interval": 1.0,
@@ -253,6 +270,7 @@ def load_config():
             "tts_url": DEFAULT_TTS_URL,
             "speaker_id": DEFAULT_SPEAKER_ID,
             "pitch": 0,
+            "reverb": 0,
             "interval": 2.0,
             "variation": 0,
             "request_interval": 1.0,
@@ -279,6 +297,7 @@ def save_config(gui):
         "tts_url": gui.tts_url_var.get(),
         "speaker_id": gui.speaker_id_var.get(),
         "pitch": gui.pitch_slider.get(),
+        "reverb": gui.reverb_slider.get(),
         "interval": gui.interval_slider.get(),
         "variation": gui.variation_slider.get(),
         "request_interval": gui.request_interval_slider.get(),
@@ -360,6 +379,7 @@ class InfiniteOracleGUI(tk.Tk):
         self.tts_url_var.set(config["tts_url"])
         self.speaker_id_var.set(config["speaker_id"])
         self.pitch_slider.set(config["pitch"])
+        self.reverb_slider.set(config["reverb"])
         self.interval_slider.set(config["interval"])
         self.variation_slider.set(config["variation"])
         self.request_interval_slider.set(config["request_interval"])
@@ -414,12 +434,20 @@ class InfiniteOracleGUI(tk.Tk):
         # Effects Section
         effects_frame = tk.LabelFrame(left_frame, text="Effects", bg="#2b2b2b", fg="white", padx=5, pady=5)
         effects_frame.pack(pady=5, fill=tk.X)
+
         pitch_frame = tk.Frame(effects_frame, bg="#2b2b2b")
         pitch_frame.pack()
         tk.Label(pitch_frame, text="Pitch Shift (semitones):", bg="#2b2b2b", fg="white").pack()
         self.pitch_slider = tk.Scale(pitch_frame, from_=-12, to=12, orient=tk.HORIZONTAL, length=200)
         self.pitch_slider.set(self.config["Ollama"]["pitch"])
         self.pitch_slider.pack()
+
+        reverb_frame = tk.Frame(effects_frame, bg="#2b2b2b")
+        reverb_frame.pack()
+        tk.Label(reverb_frame, text="Reverb (0-5):", bg="#2b2b2b", fg="white").pack()
+        self.reverb_slider = tk.Scale(reverb_frame, from_=0, to=5, resolution=0.1, orient=tk.HORIZONTAL, length=200)
+        self.reverb_slider.set(self.config["Ollama"]["reverb"])
+        self.reverb_slider.pack()
 
         # Right Column: Sliders, Buttons, Console
         right_frame = tk.Frame(self, bg="#2b2b2b")
@@ -501,6 +529,7 @@ class InfiniteOracleGUI(tk.Tk):
         self.speaker_id_entry.config(state=tk.DISABLED)
         self.system_prompt_entry.config(state=tk.DISABLED)
         self.pitch_slider.config(state=tk.DISABLED)
+        self.reverb_slider.config(state=tk.DISABLED)
         self.interval_slider.config(state=tk.DISABLED)
         self.variation_slider.config(state=tk.DISABLED)
         self.request_interval_slider.config(state=tk.DISABLED)
@@ -520,6 +549,7 @@ class InfiniteOracleGUI(tk.Tk):
             self.speaker_id_entry.config(state=tk.NORMAL)
             self.system_prompt_entry.config(state=tk.NORMAL)
             self.pitch_slider.config(state=tk.NORMAL)
+            self.reverb_slider.config(state=tk.NORMAL)
             self.interval_slider.config(state=tk.NORMAL)
             self.variation_slider.config(state=tk.NORMAL)
             self.request_interval_slider.config(state=tk.NORMAL)
@@ -569,6 +599,7 @@ class InfiniteOracleGUI(tk.Tk):
         self.stop_event.clear()
         self.stop_button.config(state=tk.NORMAL, bg="red")
         self.pitch_slider.config(state=tk.DISABLED)
+        self.reverb_slider.config(state=tk.DISABLED)
         self.interval_slider.config(state=tk.DISABLED)
         self.variation_slider.config(state=tk.DISABLED)
         self.request_interval_slider.config(state=tk.DISABLED)
@@ -636,6 +667,7 @@ class InfiniteOracleGUI(tk.Tk):
             self.system_prompt_entry.config(state=tk.NORMAL)
             self.stop_button.config(state=tk.NORMAL, bg="lightgray")
             self.pitch_slider.config(state=tk.NORMAL)
+            self.reverb_slider.config(state=tk.NORMAL)
             self.interval_slider.config(state=tk.NORMAL)
             self.variation_slider.config(state=tk.NORMAL)
             self.request_interval_slider.config(state=tk.NORMAL)
