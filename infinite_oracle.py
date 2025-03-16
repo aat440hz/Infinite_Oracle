@@ -23,8 +23,8 @@ from PIL import Image, ImageTk
 # Server defaults
 DEFAULT_OLLAMA_URL = "http://localhost:11434/api/chat"
 DEFAULT_LM_STUDIO_URL = "http://localhost:1234/v1/chat/completions"
-DEFAULT_OLLAMA_MODEL = "phi3:latest"
-DEFAULT_LM_STUDIO_MODEL = "Phi-3-mini-4k-instruct"
+DEFAULT_OLLAMA_MODEL = "llama3.2:latest"
+DEFAULT_LM_STUDIO_MODEL = "qwen2.5-1.5b-instruct"
 DEFAULT_TTS_URL = "http://localhost:5002/api/tts"
 DEFAULT_SPEAKER_ID = "p267"
 
@@ -261,7 +261,7 @@ def load_config():
             "variation": 0,
             "request_interval": 1.0,
             "timeout": 60,
-            "retries": 1
+            "retries": 0
         },
         "LM Studio": {
             "server_type": "LM Studio",
@@ -275,7 +275,7 @@ def load_config():
             "variation": 0,
             "request_interval": 1.0,
             "timeout": 60,
-            "retries": 1
+            "retries": 0
         }
     }
     if os.path.exists(CONFIG_FILE):
@@ -472,7 +472,7 @@ class InfiniteOracleGUI(tk.Tk):
         retries_frame = tk.Frame(slider_frame, bg="#2b2b2b")
         retries_frame.pack(side=tk.LEFT, padx=5)
         tk.Label(retries_frame, text="Request Retries:", bg="#2b2b2b", fg="white").pack()
-        self.retries_slider = tk.Scale(retries_frame, from_=1, to=10, resolution=1, orient=tk.HORIZONTAL)
+        self.retries_slider = tk.Scale(retries_frame, from_=0, to=5, resolution=1, orient=tk.HORIZONTAL)
         self.retries_slider.set(self.config["Ollama"]["retries"])
         self.retries_slider.pack()
 
