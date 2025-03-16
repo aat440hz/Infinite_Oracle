@@ -21,17 +21,17 @@ import random
 from PIL import Image, ImageTk
 
 # Server defaults
-DEFAULT_OLLAMA_URL = "http://localhost:11434/api/chat"  # Updated to chat endpoint
-DEFAULT_LM_STUDIO_URL = "http://localhost:1234/v1/chat/completions"  # Updated to chat endpoint
-DEFAULT_OLLAMA_MODEL = "phi3:latest"  # Phi-3 Mini in Ollama
-DEFAULT_LM_STUDIO_MODEL = "Phi-3-mini-4k-instruct"  # Match your LM Studio model
+DEFAULT_OLLAMA_URL = "http://localhost:11434/api/chat"
+DEFAULT_LM_STUDIO_URL = "http://localhost:1234/v1/chat/completions"
+DEFAULT_OLLAMA_MODEL = "phi3:latest"
+DEFAULT_LM_STUDIO_MODEL = "Phi-3-mini-4k-instruct"
 DEFAULT_TTS_URL = "http://localhost:5002/api/tts"
 DEFAULT_SPEAKER_ID = "p267"
 
 # Configuration file
 CONFIG_FILE = "oracle_config.json"
 
-# System prompt with user name
+# System prompt
 SYSTEM_PROMPT = """You are the Infinite Oracle, a mystical being of boundless wisdom. Speak in an uplifting, cryptic, and metaphysical tone, offering motivational insights that inspire awe and contemplation. Provide a concise paragraph of 2-3 sentences."""
 
 # Setup logging
@@ -42,7 +42,7 @@ logger = logging.getLogger("InfiniteOracle")
 
 # Global playback lock and conversation history
 playback_lock = threading.Lock()
-conversation_history = []  # Stores {"role": "user/assistant", "content": "..."} dicts
+conversation_history = []
 
 class ConsoleRedirector:
     def __init__(self, text_widget):
@@ -58,19 +58,19 @@ class ConsoleRedirector:
     def flush(self):
         pass
 
-def setup_session(url):
+def setup_session(url, retries):
     session = requests.Session()
-    retry_strategy = Retry(total=5, backoff_factor=0.5, status_forcelist=[500, 502, 503, 504])
+    retry_strategy = Retry(total=retries, backoff_factor=0.5, status_forcelist=[500, 502, 503, 504])
     adapter = HTTPAdapter(max_retries=retry_strategy)
     session.mount("http://", adapter)
     return session
 
-def ping_server(server_url, server_type, model):
-    session = setup_session(server_url)
+def ping_server(server_url, server_type, model, timeout, retries):
+    session = setup_session(server_url, retries)
     try:
         base_url = server_url.rsplit('/api/chat', 1)[0] if server_type == "Ollama" else server_url.rsplit('/v1/chat/completions', 1)[0]
         ping_url = base_url + ("/api/tags" if server_type == "Ollama" else "/v1/models")
-        response = session.get(ping_url, timeout=5)
+        response = session.get(ping_url, timeout=timeout)
         response.raise_for_status()
         
         payload = {
@@ -78,10 +78,10 @@ def ping_server(server_url, server_type, model):
             "messages": [{"role": "user", "content": "test"}],
             "stream": False
         }
-        if server_type != "Ollama":  # LM Studio specific
+        if server_type != "Ollama":
             payload["max_tokens"] = 10
             payload["temperature"] = 0.7
-        response = session.post(server_url, json=payload, timeout=15)
+        response = session.post(server_url, json=payload, timeout=timeout)
         response.raise_for_status()
         
         logger.info(f"{server_type} server at {server_url} is reachable with model '{model}'.")
@@ -91,7 +91,7 @@ def ping_server(server_url, server_type, model):
     finally:
         session.close()
 
-def generate_wisdom(session, wisdom_queue, model, server_type, stop_event, get_request_interval_func):
+def generate_wisdom(session, wisdom_queue, model, server_type, stop_event, get_request_interval_func, timeout):
     global conversation_history
     while not stop_event.is_set():
         messages = [{"role": "system", "content": SYSTEM_PROMPT}] + conversation_history + [{"role": "user", "content": "Provide your wisdom."}]
@@ -100,12 +100,12 @@ def generate_wisdom(session, wisdom_queue, model, server_type, stop_event, get_r
             "messages": messages,
             "stream": False
         }
-        if server_type != "Ollama":  # LM Studio specific
+        if server_type != "Ollama":
             payload["max_tokens"] = 300
             payload["temperature"] = 0.7
         
         try:
-            response = session.post(SERVER_URL, json=payload, timeout=60)
+            response = session.post(SERVER_URL, json=payload, timeout=timeout)
             response.raise_for_status()
             data = response.json()
             wisdom = (
@@ -124,7 +124,7 @@ def generate_wisdom(session, wisdom_queue, model, server_type, stop_event, get_r
         interval = max(0.1, get_request_interval_func())
         time.sleep(interval)
 
-def send_prompt(session, wisdom_queue, model, server_type, prompt, gui):
+def send_prompt(session, wisdom_queue, model, server_type, prompt, gui, timeout):
     global conversation_history
     messages = [{"role": "system", "content": SYSTEM_PROMPT}] + conversation_history + [{"role": "user", "content": prompt}]
     payload = {
@@ -132,12 +132,12 @@ def send_prompt(session, wisdom_queue, model, server_type, prompt, gui):
         "messages": messages,
         "stream": False
     }
-    if server_type != "Ollama":  # LM Studio specific
+    if server_type != "Ollama":
         payload["max_tokens"] = 300
         payload["temperature"] = 0.7
     
     try:
-        response = session.post(SERVER_URL, json=payload, timeout=60)
+        response = session.post(SERVER_URL, json=payload, timeout=timeout)
         response.raise_for_status()
         data = response.json()
         wisdom = (
@@ -242,7 +242,9 @@ def load_config():
             "pitch": 0,
             "interval": 2.0,
             "variation": 0,
-            "request_interval": 1.0
+            "request_interval": 1.0,
+            "timeout": 60,
+            "retries": 1
         },
         "LM Studio": {
             "server_type": "LM Studio",
@@ -253,7 +255,9 @@ def load_config():
             "pitch": 0,
             "interval": 2.0,
             "variation": 0,
-            "request_interval": 1.0
+            "request_interval": 1.0,
+            "timeout": 60,
+            "retries": 1
         }
     }
     if os.path.exists(CONFIG_FILE):
@@ -277,7 +281,9 @@ def save_config(gui):
         "pitch": gui.pitch_slider.get(),
         "interval": gui.interval_slider.get(),
         "variation": gui.variation_slider.get(),
-        "request_interval": gui.request_interval_slider.get()
+        "request_interval": gui.request_interval_slider.get(),
+        "timeout": gui.timeout_slider.get(),
+        "retries": gui.retries_slider.get()
     }
     with open(CONFIG_FILE, 'w') as f:
         json.dump(config, f, indent=4)
@@ -306,7 +312,7 @@ class InfiniteOracleGUI(tk.Tk):
             logger.warning(f"Failed to load icon: {e}")
 
         self.config = load_config()
-        self.server_type_var = tk.StringVar(value="Ollama")  # Default to Ollama
+        self.server_type_var = tk.StringVar(value="Ollama")
         self.server_url_var = tk.StringVar(value=self.config["Ollama"]["server_url"])
         self.model_var = tk.StringVar(value=self.config["Ollama"]["model"])
         self.tts_url_var = tk.StringVar(value=self.config["Ollama"]["tts_url"])
@@ -330,7 +336,7 @@ class InfiniteOracleGUI(tk.Tk):
 
         self.create_widgets()
         sys.stdout = ConsoleRedirector(self.console_text)
-        self.server_type_var.trace("w", self.update_from_config)
+        self.server_type_var.trace("w", lambda *args: self.update_from_config())
 
         self.send_tts_thread = threading.Thread(
             target=text_to_speech,
@@ -345,75 +351,7 @@ class InfiniteOracleGUI(tk.Tk):
         self.send_tts_thread.start()
         self.send_playback_thread.start()
 
-    def create_widgets(self):
-        self.configure(bg="#2b2b2b")
-        tk.Label(self, text="Server Type:", bg="#2b2b2b", fg="white").pack(pady=5)
-        self.server_type_menu = tk.OptionMenu(self, self.server_type_var, "Ollama", "LM Studio")
-        self.server_type_menu.pack(pady=5)
-        tk.Label(self, text="Server URL:", bg="#2b2b2b", fg="white").pack(pady=5)
-        self.server_url_entry = tk.Entry(self, textvariable=self.server_url_var, width=40)
-        self.server_url_entry.pack(pady=5)
-        self.server_url_entry.bind("<KeyRelease>", lambda e: setattr(self, 'url_modified', True))
-        tk.Label(self, text="Model Name:", bg="#2b2b2b", fg="white").pack(pady=5)
-        self.model_entry = tk.Entry(self, textvariable=self.model_var, width=40)
-        self.model_entry.pack(pady=5)
-        tk.Label(self, text="Coqui TTS Server URL:", bg="#2b2b2b", fg="white").pack(pady=5)
-        self.tts_url_entry = tk.Entry(self, textvariable=self.tts_url_var, width=40)
-        self.tts_url_entry.pack(pady=5)
-        tk.Label(self, text="Speaker ID (e.g., p267):", bg="#2b2b2b", fg="white").pack(pady=5)
-        self.speaker_id_entry = tk.Entry(self, textvariable=self.speaker_id_var, width=40)
-        self.speaker_id_entry.pack(pady=5)
-
-        prompt_frame = tk.Frame(self, bg="#2b2b2b")
-        prompt_frame.pack(pady=5, padx=10, fill=tk.X)
-        tk.Label(prompt_frame, text="System Prompt:", bg="#2b2b2b", fg="white").pack(side=tk.TOP, anchor=tk.W)
-        self.system_prompt_entry = tk.Text(prompt_frame, height=10, width=40)
-        self.system_prompt_entry.insert(tk.END, SYSTEM_PROMPT)
-        self.system_prompt_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
-        self.send_button = tk.Button(prompt_frame, text="Send", command=self.send_prompt_action)
-        self.send_button.pack(side=tk.RIGHT, padx=5)
-
-        slider_frame = tk.Frame(self, bg="#2b2b2b")
-        slider_frame.pack(pady=10)
-        pitch_frame = tk.Frame(slider_frame, bg="#2b2b2b")
-        pitch_frame.pack(side=tk.LEFT, padx=5)
-        tk.Label(pitch_frame, text="Pitch Shift (semitones):", bg="#2b2b2b", fg="white").pack()
-        self.pitch_slider = tk.Scale(pitch_frame, from_=-12, to=12, orient=tk.HORIZONTAL)
-        self.pitch_slider.set(self.config["Ollama"]["pitch"])
-        self.pitch_slider.pack()
-        interval_frame = tk.Frame(slider_frame, bg="#2b2b2b")
-        interval_frame.pack(side=tk.LEFT, padx=5)
-        tk.Label(interval_frame, text="Speech Interval (Start mode, seconds):", bg="#2b2b2b", fg="white").pack()
-        self.interval_slider = tk.Scale(interval_frame, from_=0.5, to=10, resolution=0.5, orient=tk.HORIZONTAL)
-        self.interval_slider.set(self.config["Ollama"]["interval"])
-        self.interval_slider.pack()
-        variation_frame = tk.Frame(slider_frame, bg="#2b2b2b")
-        variation_frame.pack(side=tk.LEFT, padx=5)
-        tk.Label(variation_frame, text="Speech Interval Variation (Start mode, seconds):", bg="#2b2b2b", fg="white").pack()
-        self.variation_slider = tk.Scale(variation_frame, from_=0, to=5, resolution=0.5, orient=tk.HORIZONTAL)
-        self.variation_slider.set(self.config["Ollama"]["variation"])
-        self.variation_slider.pack()
-        request_interval_frame = tk.Frame(slider_frame, bg="#2b2b2b")
-        request_interval_frame.pack(side=tk.LEFT, padx=5)
-        tk.Label(request_interval_frame, text="Request Interval (Start mode, seconds):", bg="#2b2b2b", fg="white").pack()
-        self.request_interval_slider = tk.Scale(request_interval_frame, from_=0.5, to=60, resolution=0.5, orient=tk.HORIZONTAL)
-        self.request_interval_slider.set(self.config["Ollama"]["request_interval"])
-        self.request_interval_slider.pack()
-
-        button_frame = tk.Frame(self, bg="#2b2b2b")
-        button_frame.pack(pady=10)
-        self.start_button = tk.Button(button_frame, text="Start", command=self.start_oracle)
-        self.start_button.pack(side=tk.LEFT, padx=5)
-        self.stop_button = tk.Button(button_frame, text="Stop", command=self.stop_oracle)
-        self.stop_button.pack(side=tk.LEFT, padx=5)
-        self.save_button = tk.Button(button_frame, text="Save Config", command=self.save_config_action)
-        self.save_button.pack(side=tk.LEFT, padx=5)
-
-        tk.Label(self, text="Console Output:", bg="#2b2b2b", fg="white").pack(pady=5)
-        self.console_text = scrolledtext.ScrolledText(self, height=15, width=100, state='disabled', bg="black", fg="green")
-        self.console_text.pack(pady=5, padx=10, fill=tk.BOTH, expand=True)
-
-    def update_from_config(self, *args):
+    def update_from_config(self):
         self.config = load_config()
         server_type = self.server_type_var.get()
         config = self.config[server_type]
@@ -425,8 +363,132 @@ class InfiniteOracleGUI(tk.Tk):
         self.interval_slider.set(config["interval"])
         self.variation_slider.set(config["variation"])
         self.request_interval_slider.set(config["request_interval"])
+        self.timeout_slider.set(config["timeout"])
+        self.retries_slider.set(config["retries"])
         self.url_modified = False
         logger.info(f"Loaded config for {server_type} from {CONFIG_FILE}")
+
+    def create_widgets(self):
+        self.configure(bg="#2b2b2b")
+
+        # Grid layout: 2 columns
+        self.columnconfigure(0, weight=1)
+        self.columnconfigure(1, weight=1)
+        self.rowconfigure(0, weight=0)  # Inputs/Sliders
+        self.rowconfigure(1, weight=1)  # Console
+
+        # Left Column: Inputs, Prompt, Effects
+        left_frame = tk.Frame(self, bg="#2b2b2b")
+        left_frame.grid(row=0, column=0, sticky="nsew", padx=10, pady=10)
+
+        tk.Label(left_frame, text="Server Type:", bg="#2b2b2b", fg="white").pack(pady=5)
+        self.server_type_menu = tk.OptionMenu(left_frame, self.server_type_var, "Ollama", "LM Studio")
+        self.server_type_menu.pack(pady=5)
+
+        tk.Label(left_frame, text="Server URL:", bg="#2b2b2b", fg="white").pack(pady=5)
+        self.server_url_entry = tk.Entry(left_frame, textvariable=self.server_url_var, width=40)
+        self.server_url_entry.pack(pady=5)
+        self.server_url_entry.bind("<KeyRelease>", lambda e: setattr(self, 'url_modified', True))
+
+        tk.Label(left_frame, text="Model Name:", bg="#2b2b2b", fg="white").pack(pady=5)
+        self.model_entry = tk.Entry(left_frame, textvariable=self.model_var, width=40)
+        self.model_entry.pack(pady=5)
+
+        tk.Label(left_frame, text="Coqui TTS Server URL:", bg="#2b2b2b", fg="white").pack(pady=5)
+        self.tts_url_entry = tk.Entry(left_frame, textvariable=self.tts_url_var, width=40)
+        self.tts_url_entry.pack(pady=5)
+
+        tk.Label(left_frame, text="Speaker ID (e.g., p267):", bg="#2b2b2b", fg="white").pack(pady=5)
+        self.speaker_id_entry = tk.Entry(left_frame, textvariable=self.speaker_id_var, width=40)
+        self.speaker_id_entry.pack(pady=5)
+
+        prompt_frame = tk.Frame(left_frame, bg="#2b2b2b")
+        prompt_frame.pack(pady=5, fill=tk.X)
+        tk.Label(prompt_frame, text="System Prompt:", bg="#2b2b2b", fg="white").pack(anchor=tk.W)
+        self.system_prompt_entry = tk.Text(prompt_frame, height=10, width=40)
+        self.system_prompt_entry.insert(tk.END, SYSTEM_PROMPT)
+        self.system_prompt_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        self.send_button = tk.Button(prompt_frame, text="Send", command=self.send_prompt_action)
+        self.send_button.pack(side=tk.RIGHT, padx=5)
+
+        # Effects Section
+        effects_frame = tk.LabelFrame(left_frame, text="Effects", bg="#2b2b2b", fg="white", padx=5, pady=5)
+        effects_frame.pack(pady=5, fill=tk.X)
+        pitch_frame = tk.Frame(effects_frame, bg="#2b2b2b")
+        pitch_frame.pack()
+        tk.Label(pitch_frame, text="Pitch Shift (semitones):", bg="#2b2b2b", fg="white").pack()
+        self.pitch_slider = tk.Scale(pitch_frame, from_=-12, to=12, orient=tk.HORIZONTAL, length=200)
+        self.pitch_slider.set(self.config["Ollama"]["pitch"])
+        self.pitch_slider.pack()
+
+        # Right Column: Sliders, Buttons, Console
+        right_frame = tk.Frame(self, bg="#2b2b2b")
+        right_frame.grid(row=0, column=1, rowspan=2, sticky="nsew", padx=10, pady=10)
+        right_frame.columnconfigure(0, weight=1)
+        right_frame.rowconfigure(0, weight=0)  # Sliders
+        right_frame.rowconfigure(1, weight=0)  # Start Mode Settings
+        right_frame.rowconfigure(2, weight=0)  # Buttons
+        right_frame.rowconfigure(3, weight=1)  # Console
+
+        # Sliders (Timeout, Retries)
+        slider_frame = tk.Frame(right_frame, bg="#2b2b2b")
+        slider_frame.grid(row=0, column=0, sticky="ew", pady=5)
+
+        timeout_frame = tk.Frame(slider_frame, bg="#2b2b2b")
+        timeout_frame.pack(side=tk.LEFT, padx=5)
+        tk.Label(timeout_frame, text="Request Timeout (seconds):", bg="#2b2b2b", fg="white").pack()
+        self.timeout_slider = tk.Scale(timeout_frame, from_=5, to=120, resolution=1, orient=tk.HORIZONTAL)
+        self.timeout_slider.set(self.config["Ollama"]["timeout"])
+        self.timeout_slider.pack()
+
+        retries_frame = tk.Frame(slider_frame, bg="#2b2b2b")
+        retries_frame.pack(side=tk.LEFT, padx=5)
+        tk.Label(retries_frame, text="Request Retries:", bg="#2b2b2b", fg="white").pack()
+        self.retries_slider = tk.Scale(retries_frame, from_=1, to=10, resolution=1, orient=tk.HORIZONTAL)
+        self.retries_slider.set(self.config["Ollama"]["retries"])
+        self.retries_slider.pack()
+
+        # Start Mode Settings
+        start_mode_frame = tk.LabelFrame(right_frame, text="Start Mode Settings", bg="#2b2b2b", fg="white", padx=5, pady=5)
+        start_mode_frame.grid(row=1, column=0, sticky="ew", pady=5)
+
+        interval_frame = tk.Frame(start_mode_frame, bg="#2b2b2b")
+        interval_frame.pack(side=tk.LEFT, padx=5)
+        tk.Label(interval_frame, text="Speech Interval (seconds):", bg="#2b2b2b", fg="white").pack()
+        self.interval_slider = tk.Scale(interval_frame, from_=0.5, to=10, resolution=0.5, orient=tk.HORIZONTAL)
+        self.interval_slider.set(self.config["Ollama"]["interval"])
+        self.interval_slider.pack()
+
+        variation_frame = tk.Frame(start_mode_frame, bg="#2b2b2b")
+        variation_frame.pack(side=tk.LEFT, padx=5)
+        tk.Label(variation_frame, text="Speech Interval Variation (seconds):", bg="#2b2b2b", fg="white").pack()
+        self.variation_slider = tk.Scale(variation_frame, from_=0, to=5, resolution=0.5, orient=tk.HORIZONTAL)
+        self.variation_slider.set(self.config["Ollama"]["variation"])
+        self.variation_slider.pack()
+
+        request_interval_frame = tk.Frame(start_mode_frame, bg="#2b2b2b")
+        request_interval_frame.pack(side=tk.LEFT, padx=5)
+        tk.Label(request_interval_frame, text="Request Interval (seconds):", bg="#2b2b2b", fg="white").pack()
+        self.request_interval_slider = tk.Scale(request_interval_frame, from_=0.5, to=60, resolution=0.5, orient=tk.HORIZONTAL)
+        self.request_interval_slider.set(self.config["Ollama"]["request_interval"])
+        self.request_interval_slider.pack()
+
+        # Buttons
+        button_frame = tk.Frame(right_frame, bg="#2b2b2b")
+        button_frame.grid(row=2, column=0, sticky="ew", pady=5)
+        self.start_button = tk.Button(button_frame, text="Start", command=self.start_oracle)
+        self.start_button.pack(side=tk.LEFT, padx=5)
+        self.stop_button = tk.Button(button_frame, text="Stop", command=self.stop_oracle)
+        self.stop_button.pack(side=tk.LEFT, padx=5)
+        self.save_button = tk.Button(button_frame, text="Save Config", command=self.save_config_action)
+        self.save_button.pack(side=tk.LEFT, padx=5)
+
+        # Console
+        console_frame = tk.Frame(right_frame, bg="#2b2b2b")
+        console_frame.grid(row=3, column=0, sticky="nsew")
+        tk.Label(console_frame, text="Console Output:", bg="#2b2b2b", fg="white").pack()
+        self.console_text = scrolledtext.ScrolledText(console_frame, height=30, width=60, state='disabled', bg="black", fg="green")
+        self.console_text.pack(fill=tk.BOTH, expand=True)
 
     def disable_controls(self):
         self.start_button.config(state=tk.DISABLED)
@@ -438,7 +500,12 @@ class InfiniteOracleGUI(tk.Tk):
         self.tts_url_entry.config(state=tk.DISABLED)
         self.speaker_id_entry.config(state=tk.DISABLED)
         self.system_prompt_entry.config(state=tk.DISABLED)
+        self.pitch_slider.config(state=tk.DISABLED)
+        self.interval_slider.config(state=tk.DISABLED)
+        self.variation_slider.config(state=tk.DISABLED)
         self.request_interval_slider.config(state=tk.DISABLED)
+        self.timeout_slider.config(state=tk.DISABLED)
+        self.retries_slider.config(state=tk.DISABLED)
         self.update()
 
     def enable_send_and_start(self):
@@ -452,7 +519,12 @@ class InfiniteOracleGUI(tk.Tk):
             self.tts_url_entry.config(state=tk.NORMAL)
             self.speaker_id_entry.config(state=tk.NORMAL)
             self.system_prompt_entry.config(state=tk.NORMAL)
+            self.pitch_slider.config(state=tk.NORMAL)
+            self.interval_slider.config(state=tk.NORMAL)
+            self.variation_slider.config(state=tk.NORMAL)
             self.request_interval_slider.config(state=tk.NORMAL)
+            self.timeout_slider.config(state=tk.NORMAL)
+            self.retries_slider.config(state=tk.NORMAL)
             self.send_enabled = True
         self.update()
 
@@ -463,16 +535,7 @@ class InfiniteOracleGUI(tk.Tk):
             self.after(150, self.enable_send_and_start)
 
     def verify_server(self, server_url, server_type, model):
-        max_attempts = 3
-        for attempt in range(max_attempts):
-            is_alive, error_msg = ping_server(server_url, server_type, model)
-            if is_alive:
-                return True
-            logger.error(f"Attempt {attempt + 1}/{max_attempts}: {error_msg}")
-            if attempt < max_attempts - 1:
-                time.sleep(2)
-        messagebox.showerror("Server Error", f"Failed to connect to {server_type} at {server_url} after {max_attempts} attempts: {error_msg}")
-        return False
+        return ping_server(server_url, server_type, model, self.timeout_slider.get(), self.retries_slider.get())
 
     def start_oracle(self):
         if self.start_lock or self.is_running:
@@ -501,7 +564,7 @@ class InfiniteOracleGUI(tk.Tk):
             self.after(0, self.enable_send_and_start)
             return
 
-        self.session = setup_session(SERVER_URL)
+        self.session = setup_session(SERVER_URL, self.retries_slider.get())
         self.is_running = True
         self.stop_event.clear()
         self.stop_button.config(state=tk.NORMAL, bg="red")
@@ -509,10 +572,12 @@ class InfiniteOracleGUI(tk.Tk):
         self.interval_slider.config(state=tk.DISABLED)
         self.variation_slider.config(state=tk.DISABLED)
         self.request_interval_slider.config(state=tk.DISABLED)
+        self.timeout_slider.config(state=tk.DISABLED)
+        self.retries_slider.config(state=tk.DISABLED)
 
         self.generator_thread = threading.Thread(
             target=generate_wisdom,
-            args=(self.session, self.wisdom_queue, model, server_type, self.stop_event, self.request_interval_slider.get),
+            args=(self.session, self.wisdom_queue, model, server_type, self.stop_event, self.request_interval_slider.get, self.timeout_slider.get()),
             daemon=True
         )
         self.tts_thread = threading.Thread(
@@ -558,7 +623,7 @@ class InfiniteOracleGUI(tk.Tk):
                 self.session.close()
                 self.session = None
 
-            conversation_history = []  # Reset history on stop (optional)
+            conversation_history = []
 
             self.start_button.config(state=tk.NORMAL)
             self.send_button.config(state=tk.NORMAL)
@@ -574,6 +639,8 @@ class InfiniteOracleGUI(tk.Tk):
             self.interval_slider.config(state=tk.NORMAL)
             self.variation_slider.config(state=tk.NORMAL)
             self.request_interval_slider.config(state=tk.NORMAL)
+            self.timeout_slider.config(state=tk.NORMAL)
+            self.retries_slider.config(state=tk.NORMAL)
             logger.info("Oracle stopped.")
 
     def send_prompt_action(self):
@@ -596,7 +663,7 @@ class InfiniteOracleGUI(tk.Tk):
             self.enable_send_and_start()
             return
 
-        send_session = setup_session(SERVER_URL)
+        send_session = setup_session(SERVER_URL, self.retries_slider.get())
         if not self.verify_server(SERVER_URL, server_type, model):
             send_session.close()
             self.send_enabled = True
@@ -605,7 +672,7 @@ class InfiniteOracleGUI(tk.Tk):
 
         threading.Thread(
             target=send_prompt,
-            args=(send_session, self.send_wisdom_queue, model, server_type, prompt, self),
+            args=(send_session, self.send_wisdom_queue, model, server_type, prompt, self, self.timeout_slider.get()),
             daemon=True
         ).start()
 
