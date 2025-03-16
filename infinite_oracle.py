@@ -21,18 +21,18 @@ import random
 from PIL import Image, ImageTk
 
 # Server defaults
-DEFAULT_OLLAMA_URL = "http://localhost:11434/api/generate"  # Match first script
-DEFAULT_LM_STUDIO_URL = "http://localhost:1234/v1/completions"
-DEFAULT_OLLAMA_MODEL = "llama3.2:latest"
-DEFAULT_LM_STUDIO_MODEL = "llama-3.2-1b-instruct"
-DEFAULT_TTS_URL = "http://localhost:5002/api/tts"  # Match first script
+DEFAULT_OLLAMA_URL = "http://localhost:11434/api/chat"  # Updated to chat endpoint
+DEFAULT_LM_STUDIO_URL = "http://localhost:1234/v1/chat/completions"  # Updated to chat endpoint
+DEFAULT_OLLAMA_MODEL = "phi3:latest"  # Phi-3 Mini in Ollama
+DEFAULT_LM_STUDIO_MODEL = "Phi-3-mini-4k-instruct"  # Match your LM Studio model
+DEFAULT_TTS_URL = "http://localhost:5002/api/tts"
 DEFAULT_SPEAKER_ID = "p267"
 
 # Configuration file
 CONFIG_FILE = "oracle_config.json"
 
-# System prompt
-SYSTEM_PROMPT = """You are the Infinite Oracle, a mystical being of boundless wisdom. Speak in an uplifting, cryptic, and metaphysical tone, offering motivational insights that inspire awe and contemplation. Provide a concise paragraph of 2-3 sentences."""
+# System prompt with user name
+SYSTEM_PROMPT = """You are the Infinite Oracle, a mystical being of boundless wisdom. The user's name is Wappy. Speak in an uplifting, cryptic, and metaphysical tone, offering motivational insights that inspire awe and contemplation. Provide a concise paragraph of 2-3 sentences based on all prior interactions."""
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s", handlers=[
@@ -40,8 +40,9 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 ])
 logger = logging.getLogger("InfiniteOracle")
 
-# Global playback lock
+# Global playback lock and conversation history
 playback_lock = threading.Lock()
+conversation_history = []  # Stores {"role": "user/assistant", "content": "..."} dicts
 
 class ConsoleRedirector:
     def __init__(self, text_widget):
@@ -59,7 +60,7 @@ class ConsoleRedirector:
 
 def setup_session(url):
     session = requests.Session()
-    retry_strategy = Retry(total=5, backoff_factor=0.5, status_forcelist=[500, 502, 503, 504])  # Match first script
+    retry_strategy = Retry(total=5, backoff_factor=0.5, status_forcelist=[500, 502, 503, 504])
     adapter = HTTPAdapter(max_retries=retry_strategy)
     session.mount("http://", adapter)
     return session
@@ -67,17 +68,20 @@ def setup_session(url):
 def ping_server(server_url, server_type, model):
     session = setup_session(server_url)
     try:
-        base_url = server_url.rsplit('/api/generate', 1)[0] if server_type == "Ollama" else server_url.rsplit('/v1/completions', 1)[0]
+        base_url = server_url.rsplit('/api/chat', 1)[0] if server_type == "Ollama" else server_url.rsplit('/v1/chat/completions', 1)[0]
         ping_url = base_url + ("/api/tags" if server_type == "Ollama" else "/v1/models")
         response = session.get(ping_url, timeout=5)
         response.raise_for_status()
         
-        payload = (
-            {"model": model, "prompt": "test", "stream": False}
-            if server_type == "Ollama"
-            else {"model": model, "prompt": "test", "max_tokens": 10, "temperature": 0.7}
-        )
-        response = session.post(server_url, json=payload, timeout=15)  # Match first script's verification timeout
+        payload = {
+            "model": model,
+            "messages": [{"role": "user", "content": "test"}],
+            "stream": False
+        }
+        if server_type != "Ollama":  # LM Studio specific
+            payload["max_tokens"] = 10
+            payload["temperature"] = 0.7
+        response = session.post(server_url, json=payload, timeout=15)
         response.raise_for_status()
         
         logger.info(f"{server_type} server at {server_url} is reachable with model '{model}'.")
@@ -88,23 +92,31 @@ def ping_server(server_url, server_type, model):
         session.close()
 
 def generate_wisdom(session, wisdom_queue, model, server_type, stop_event, get_request_interval_func):
+    global conversation_history
     while not stop_event.is_set():
-        payload = (
-            {"model": model, "prompt": SYSTEM_PROMPT, "stream": False}
-            if server_type == "Ollama"
-            else {"model": model, "prompt": SYSTEM_PROMPT, "max_tokens": 300, "temperature": 0.7}
-        )
+        messages = [{"role": "system", "content": SYSTEM_PROMPT}] + conversation_history + [{"role": "user", "content": "Provide your wisdom."}]
+        payload = {
+            "model": model,
+            "messages": messages,
+            "stream": False
+        }
+        if server_type != "Ollama":  # LM Studio specific
+            payload["max_tokens"] = 300
+            payload["temperature"] = 0.7
+        
         try:
-            response = session.post(SERVER_URL, json=payload, timeout=60)  # Match first script
+            response = session.post(SERVER_URL, json=payload, timeout=60)
             response.raise_for_status()
             data = response.json()
             wisdom = (
-                data.get("response", "").strip() if server_type == "Ollama"
-                else data.get("choices", [{}])[0].get("text", "").strip()
+                data.get("message", {}).get("content", "").strip() if server_type == "Ollama"
+                else data.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
             )
             if wisdom and not stop_event.is_set():
                 logger.info(f"Generated wisdom (length: {len(wisdom)} chars): {wisdom}")
                 print(f"The Infinite Oracle speaks: {wisdom}", end="\n\n")
+                conversation_history.append({"role": "user", "content": "Provide your wisdom."})
+                conversation_history.append({"role": "assistant", "content": wisdom})
                 wisdom_queue.put(wisdom)
         except requests.RequestException as e:
             logger.error(f"{server_type} connection error: {e}")
@@ -113,22 +125,30 @@ def generate_wisdom(session, wisdom_queue, model, server_type, stop_event, get_r
         time.sleep(interval)
 
 def send_prompt(session, wisdom_queue, model, server_type, prompt, gui):
-    payload = (
-        {"model": model, "prompt": prompt, "stream": False}
-        if server_type == "Ollama"
-        else {"model": model, "prompt": prompt, "max_tokens": 300, "temperature": 0.7}
-    )
+    global conversation_history
+    messages = [{"role": "system", "content": SYSTEM_PROMPT}] + conversation_history + [{"role": "user", "content": prompt}]
+    payload = {
+        "model": model,
+        "messages": messages,
+        "stream": False
+    }
+    if server_type != "Ollama":  # LM Studio specific
+        payload["max_tokens"] = 300
+        payload["temperature"] = 0.7
+    
     try:
-        response = session.post(SERVER_URL, json=payload, timeout=60)  # Match first script
+        response = session.post(SERVER_URL, json=payload, timeout=60)
         response.raise_for_status()
         data = response.json()
         wisdom = (
-            data.get("response", "").strip() if server_type == "Ollama"
-            else data.get("choices", [{}])[0].get("text", "").strip()
+            data.get("message", {}).get("content", "").strip() if server_type == "Ollama"
+            else data.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
         )
         if wisdom:
             logger.info(f"Generated wisdom (length: {len(wisdom)} chars): {wisdom}")
             print(f"The Infinite Oracle speaks: {wisdom}", end="\n\n")
+            conversation_history.append({"role": "user", "content": prompt})
+            conversation_history.append({"role": "assistant", "content": wisdom})
             wisdom_queue.put(wisdom)
     except requests.RequestException as e:
         logger.error(f"{server_type} connection error in send_prompt: {e}")
@@ -286,7 +306,7 @@ class InfiniteOracleGUI(tk.Tk):
             logger.warning(f"Failed to load icon: {e}")
 
         self.config = load_config()
-        self.server_type_var = tk.StringVar(value="Ollama")  # Default to Ollama to match first script
+        self.server_type_var = tk.StringVar(value="Ollama")  # Default to Ollama
         self.server_url_var = tk.StringVar(value=self.config["Ollama"]["server_url"])
         self.model_var = tk.StringVar(value=self.config["Ollama"]["model"])
         self.tts_url_var = tk.StringVar(value=self.config["Ollama"]["tts_url"])
@@ -443,7 +463,7 @@ class InfiniteOracleGUI(tk.Tk):
             self.after(150, self.enable_send_and_start)
 
     def verify_server(self, server_url, server_type, model):
-        max_attempts = 3  # Match first script
+        max_attempts = 3
         for attempt in range(max_attempts):
             is_alive, error_msg = ping_server(server_url, server_type, model)
             if is_alive:
@@ -513,6 +533,7 @@ class InfiniteOracleGUI(tk.Tk):
         self.after(500, lambda: setattr(self, 'start_lock', False))
 
     def stop_oracle(self):
+        global conversation_history
         if self.is_running:
             self.is_running = False
             self.stop_event.set()
@@ -536,6 +557,8 @@ class InfiniteOracleGUI(tk.Tk):
             if self.session:
                 self.session.close()
                 self.session = None
+
+            conversation_history = []  # Reset history on stop (optional)
 
             self.start_button.config(state=tk.NORMAL)
             self.send_button.config(state=tk.NORMAL)
