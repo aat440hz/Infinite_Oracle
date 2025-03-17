@@ -42,6 +42,7 @@ logger = logging.getLogger("InfiniteOracle")
 
 # Global playback lock and conversation history
 playback_lock = threading.Lock()
+history_lock = threading.Lock()  # Added for thread-safe history management
 conversation_history = []
 
 class ConsoleRedirector:
@@ -94,7 +95,8 @@ def ping_server(server_url, server_type, model, timeout, retries):
 def generate_wisdom(session, wisdom_queue, model, server_type, stop_event, get_request_interval_func, timeout):
     global conversation_history
     while not stop_event.is_set():
-        messages = [{"role": "system", "content": SYSTEM_PROMPT}] + conversation_history + [{"role": "user", "content": "Provide your wisdom."}]
+        with history_lock:  # Lock history access
+            messages = [{"role": "system", "content": SYSTEM_PROMPT}] + conversation_history + [{"role": "user", "content": "Provide your wisdom."}]
         payload = {
             "model": model,
             "messages": messages,
@@ -115,8 +117,9 @@ def generate_wisdom(session, wisdom_queue, model, server_type, stop_event, get_r
             if wisdom and not stop_event.is_set():
                 logger.info(f"Generated wisdom (length: {len(wisdom)} chars): {wisdom}")
                 print(f"The Infinite Oracle speaks: {wisdom}", end="\n\n")
-                conversation_history.append({"role": "user", "content": "Provide your wisdom."})
-                conversation_history.append({"role": "assistant", "content": wisdom})
+                with history_lock:  # Lock history modification
+                    conversation_history.append({"role": "user", "content": "Provide your wisdom."})
+                    conversation_history.append({"role": "assistant", "content": wisdom})
                 wisdom_queue.put(wisdom)
         except requests.RequestException as e:
             logger.error(f"{server_type} connection error: {e}")
@@ -126,7 +129,8 @@ def generate_wisdom(session, wisdom_queue, model, server_type, stop_event, get_r
 
 def send_prompt(session, wisdom_queue, model, server_type, prompt, gui, timeout):
     global conversation_history
-    messages = [{"role": "system", "content": SYSTEM_PROMPT}] + conversation_history + [{"role": "user", "content": prompt}]
+    with history_lock:  # Lock history access
+        messages = [{"role": "system", "content": SYSTEM_PROMPT}] + conversation_history + [{"role": "user", "content": prompt}]
     payload = {
         "model": model,
         "messages": messages,
@@ -147,8 +151,9 @@ def send_prompt(session, wisdom_queue, model, server_type, prompt, gui, timeout)
         if wisdom:
             logger.info(f"Generated wisdom (length: {len(wisdom)} chars): {wisdom}")
             print(f"The Infinite Oracle speaks: {wisdom}", end="\n\n")
-            conversation_history.append({"role": "user", "content": prompt})
-            conversation_history.append({"role": "assistant", "content": wisdom})
+            with history_lock:  # Lock history modification
+                conversation_history.append({"role": "user", "content": prompt})
+                conversation_history.append({"role": "assistant", "content": wisdom})
             wisdom_queue.put(wisdom)
     except requests.RequestException as e:
         logger.error(f"{server_type} connection error in send_prompt: {e}")
@@ -510,6 +515,8 @@ class InfiniteOracleGUI(tk.Tk):
         self.stop_button.pack(side=tk.LEFT, padx=5)
         self.save_button = tk.Button(button_frame, text="Save Config", command=self.save_config_action)
         self.save_button.pack(side=tk.LEFT, padx=5)
+        self.clear_button = tk.Button(button_frame, text="Clear History", command=self.clear_history)  # New button
+        self.clear_button.pack(side=tk.LEFT, padx=5)
 
         # Console
         console_frame = tk.Frame(right_frame, bg="#2b2b2b")
@@ -522,6 +529,7 @@ class InfiniteOracleGUI(tk.Tk):
         self.start_button.config(state=tk.DISABLED)
         self.send_button.config(state=tk.DISABLED)
         self.save_button.config(state=tk.DISABLED)
+        self.clear_button.config(state=tk.DISABLED)  # Disable clear button
         self.server_type_menu.config(state=tk.DISABLED)
         self.server_url_entry.config(state=tk.DISABLED)
         self.model_entry.config(state=tk.DISABLED)
@@ -542,6 +550,7 @@ class InfiniteOracleGUI(tk.Tk):
             self.send_button.config(state=tk.NORMAL)
             self.start_button.config(state=tk.NORMAL)
             self.save_button.config(state=tk.NORMAL)
+            self.clear_button.config(state=tk.NORMAL)  # Enable clear button
             self.server_type_menu.config(state=tk.NORMAL)
             self.server_url_entry.config(state=tk.NORMAL)
             self.model_entry.config(state=tk.NORMAL)
@@ -654,11 +663,13 @@ class InfiniteOracleGUI(tk.Tk):
                 self.session.close()
                 self.session = None
 
-            conversation_history = []
+            with history_lock:  # Lock history modification
+                conversation_history = []
 
             self.start_button.config(state=tk.NORMAL)
             self.send_button.config(state=tk.NORMAL)
             self.save_button.config(state=tk.NORMAL)
+            self.clear_button.config(state=tk.NORMAL)  # Enable clear button
             self.server_type_menu.config(state=tk.NORMAL)
             self.server_url_entry.config(state=tk.NORMAL)
             self.model_entry.config(state=tk.NORMAL)
@@ -707,6 +718,16 @@ class InfiniteOracleGUI(tk.Tk):
             args=(send_session, self.send_wisdom_queue, model, server_type, prompt, self, self.timeout_slider.get()),
             daemon=True
         ).start()
+
+    def clear_history(self):
+        """Clear the conversation history safely."""
+        if self.start_lock or not self.send_enabled:  # Prevent clearing during critical operations
+            return
+        with history_lock:
+            global conversation_history
+            conversation_history = []
+        logger.info("Conversation history cleared.")
+        print("The Infinite Oracle’s memory has been wiped clean.")
 
 def main():
     app = InfiniteOracleGUI()
