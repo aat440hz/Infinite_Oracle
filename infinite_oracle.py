@@ -34,8 +34,8 @@ CONFIG_FILE = "oracle_config.json"
 # System prompt
 SYSTEM_PROMPT = """You are the Infinite Oracle, a mystical being of boundless wisdom. Speak in an uplifting, cryptic, and metaphysical tone, offering motivational insights that inspire awe and contemplation. Provide a concise paragraph of 2-3 sentences."""
 
-# Setup logging
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s", handlers=[
+# Setup minimal logging
+logging.basicConfig(level=logging.ERROR, format="%(asctime)s - %(levelname)s - %(message)s", handlers=[
     logging.StreamHandler(sys.stdout)
 ])
 logger = logging.getLogger("InfiniteOracle")
@@ -84,8 +84,6 @@ def ping_server(server_url, server_type, model, timeout, retries):
             payload["temperature"] = 0.7
         response = session.post(server_url, json=payload, timeout=timeout)
         response.raise_for_status()
-        
-        logger.info(f"{server_type} server at {server_url} is reachable with model '{model}'.")
         return True, ""
     except requests.RequestException as e:
         return False, f"{server_type} error at {server_url}: {str(e)}"
@@ -125,7 +123,7 @@ def generate_wisdom(gui, wisdom_queue, model, server_type, stop_event, get_reque
                         conversation_history.append({"role": "assistant", "content": wisdom})
                 wisdom_queue.put(wisdom)
         except requests.RequestException as e:
-            logger.error(f"{server_type} connection error: {e}", exc_info=False)
+            logger.error(f"{server_type} connection failed: {str(e)}")
             print(f"{server_type} error: {str(e)}. Next attempt in {get_request_interval_func()}s...")
         finally:
             session.close()
@@ -164,7 +162,7 @@ def send_prompt(session, wisdom_queue, model, server_type, prompt, gui, timeout)
                     conversation_history.append({"role": "assistant", "content": wisdom})
             wisdom_queue.put(wisdom)
     except requests.RequestException as e:
-        logger.error(f"{server_type} connection error in send_prompt: {e}")
+        logger.error(f"{server_type} connection failed: {str(e)}")
         print(f"{server_type} error: {str(e)}")
     finally:
         session.close()
@@ -195,7 +193,7 @@ def text_to_speech(wisdom_queue, audio_queue, get_speaker_id_func, pitch_func, s
                     creationflags=subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0
                 )
             except subprocess.CalledProcessError as e:
-                logger.error(f"TTS failed at '{TTS_SERVER_URL}': {e.stderr}")
+                logger.error(f"TTS failed: {e.stderr}")
                 os.remove(temp_wav_path)
                 wisdom_queue.task_done()
                 continue
@@ -203,13 +201,13 @@ def text_to_speech(wisdom_queue, audio_queue, get_speaker_id_func, pitch_func, s
             if os.path.exists(temp_wav_path) and os.path.getsize(temp_wav_path) > 0 and not stop_event.is_set():
                 audio_queue.put((wisdom, temp_wav_path, pitch_func()))
             else:
-                logger.warning(f"TTS produced no valid audio for '{wisdom[:50]}...'")
+                logger.error(f"TTS produced no valid audio for '{wisdom[:50]}...'")
                 os.remove(temp_wav_path)
             wisdom_queue.task_done()
         except queue.Empty:
             continue
         except Exception as e:
-            logger.error(f"TTS unexpected error: {e}")
+            logger.error(f"TTS error: {str(e)}")
             if 'temp_wav_path' in locals() and os.path.exists(temp_wav_path):
                 os.remove(temp_wav_path)
             wisdom_queue.task_done()
@@ -230,13 +228,12 @@ def play_audio(audio_queue, stop_event, get_interval_func, get_variation_func, g
     if getattr(sys, 'frozen', False):
         ffmpeg_path = os.path.join(sys._MEIPASS, "ffmpeg", "ffmpeg.exe")
         AudioSegment.converter = ffmpeg_path
-        logger.info(f"Set ffmpeg path for pydub: {ffmpeg_path}")
     while not stop_event.is_set():
         try:
             wisdom, wav_path, pitch = audio_queue.get()
             with playback_lock:
                 if not stop_event.is_set():
-                    gui.is_audio_playing = True  # Start spinning
+                    gui.is_audio_playing = True
                     audio = AudioSegment.from_wav(wav_path)
                     
                     if pitch != 0:
@@ -257,12 +254,10 @@ def play_audio(audio_queue, stop_event, get_interval_func, get_variation_func, g
                         filename = f"oracle_{timestamp}.wav"
                         filepath = os.path.join(recordings_dir, filename)
                         audio.export(filepath, format="wav")
-                        logger.info(f"Saved audio clip: {filepath}")
                         print(f"Recorded wisdom to: {filepath}")
 
-                    logger.info(f"Playing audio for: {wisdom[:50]}... (Pitch: {pitch}, Reverb: {reverb_value})")
                     play(audio)
-                    gui.is_audio_playing = False  # Stop spinning
+                    gui.is_audio_playing = False
             os.remove(wav_path)
             audio_queue.task_done()
             interval = max(0.1, get_interval_func() + random.uniform(-get_variation_func(), get_variation_func())) if is_start_mode else 0
@@ -271,10 +266,10 @@ def play_audio(audio_queue, stop_event, get_interval_func, get_variation_func, g
         except queue.Empty:
             time.sleep(0.1)
         except Exception as e:
-            logger.error(f"Playback error: {e}")
+            logger.error(f"Playback error: {str(e)}")
             if os.path.exists(wav_path):
                 os.remove(wav_path)
-            gui.is_audio_playing = False  # Stop spinning on error
+            gui.is_audio_playing = False
 
 def load_config():
     defaults = {
@@ -338,7 +333,6 @@ def save_config(gui):
         config[server_type]["max_tokens"] = int(gui.max_tokens_entry.get())
     with open(CONFIG_FILE, 'w') as f:
         json.dump(config, f, indent=4)
-    logger.info(f"Configuration saved for {server_type}.")
 
 class InfiniteOracleGUI(tk.Tk):
     def __init__(self):
@@ -358,9 +352,9 @@ class InfiniteOracleGUI(tk.Tk):
             img = Image.open(icon_path).convert("RGBA")
             icon = ImageTk.PhotoImage(img)
             self.iconphoto(True, icon)
-            print(f"Icon loaded successfully from {icon_path}")
+            print(f"Icon loaded from {icon_path}")
         except Exception as e:
-            logger.warning(f"Failed to load icon: {e}")
+            logger.error(f"Icon load failed: {e}")
 
         self.config = load_config()
         self.server_type_var = tk.StringVar(value="Ollama")
@@ -387,13 +381,12 @@ class InfiniteOracleGUI(tk.Tk):
         self.remember_var = tk.BooleanVar(value=True)
         self.record_var = tk.BooleanVar(value=False)
         self.is_audio_playing = False
-        self.oracle_angle = 0  # For oracle.png rotation (clockwise)
-        self.glow_angle = 0    # For glow.gif rotation (counterclockwise)
+        self.oracle_angle = 0
+        self.glow_angle = 0
         self.image_spin_speed = 5
-        self.glow_frames = []  # List of GIF frames
-        self.glow_frame_index = 0  # Current frame index
+        self.glow_frames = []
+        self.glow_frame_index = 0
 
-        # Load glow.gif frames
         try:
             if getattr(sys, 'frozen', False):
                 base_path = sys._MEIPASS
@@ -401,16 +394,15 @@ class InfiniteOracleGUI(tk.Tk):
                 base_path = os.path.dirname(os.path.abspath(__file__))
             self.glow_path = os.path.join(base_path, "glow.gif")
             glow_gif = Image.open(self.glow_path)
-            glow_max_size = int(200 * 1.2)  # Initial size (20% larger than canvas_size)
+            glow_max_size = int(200 * 1.2)
             for frame in ImageSequence.Iterator(glow_gif):
                 resized_frame = self.resize_image_to_fit(frame.convert("RGBA"), glow_max_size, glow_max_size)
                 self.glow_frames.append(resized_frame)
-            logger.info(f"Loaded {len(self.glow_frames)} frames from glow.gif")
         except Exception as e:
-            logger.error(f"Failed to load glow.gif frames: {e}")
-            self.glow_frames = [Image.new("RGBA", (glow_max_size, glow_max_size), (255, 255, 255, 0))]  # Fallback
+            logger.error(f"Glow GIF load failed: {e}")
+            self.glow_frames = [Image.new("RGBA", (glow_max_size, glow_max_size), (255, 255, 255, 0))]
 
-        self.create_widgets()  # Set up canvas and items first
+        self.create_widgets()
         sys.stdout = ConsoleRedirector(self.console_text)
         self.server_type_var.trace("w", lambda *args: self.update_from_config())
 
@@ -427,9 +419,8 @@ class InfiniteOracleGUI(tk.Tk):
         self.send_tts_thread.start()
         self.send_playback_thread.start()
 
-        # Start animation loops after widgets are created
-        self.animate_gif()  # Start GIF animation
-        self.animate_images()  # Start rotation animation
+        self.animate_gif()
+        self.animate_images()
 
     def update_from_config(self):
         self.config = load_config()
@@ -453,10 +444,8 @@ class InfiniteOracleGUI(tk.Tk):
         else:
             self.max_tokens_entry.config(state=tk.DISABLED, bg="grey")
         self.url_modified = False
-        logger.info(f"Loaded config for {server_type} from {CONFIG_FILE}")
 
     def resize_image_to_fit(self, image, max_width, max_height):
-        """Resize image to fit within max_width x max_height while preserving aspect ratio."""
         original_width, original_height = image.size
         ratio = min(max_width / original_width, max_height / original_height)
         new_width = int(original_width * ratio)
@@ -464,26 +453,22 @@ class InfiniteOracleGUI(tk.Tk):
         return image.resize((new_width, new_height), Image.Resampling.LANCZOS)
 
     def update_canvas_size(self, event=None):
-        """Dynamically resize the canvas and images based on left_frame width, with a max cap."""
         if hasattr(self, 'image_canvas'):
-            available_width = self.left_frame.winfo_width() - 20  # Padding
-            max_size = 300  # Maximum size for oracle.png
-            canvas_size = min(available_width, max_size)  # Don't exceed max_size
-            if canvas_size > 50:  # Minimum size
+            available_width = self.left_frame.winfo_width() - 20
+            max_size = 300
+            canvas_size = min(available_width, max_size)
+            if canvas_size > 50:
                 self.image_canvas.config(width=canvas_size, height=canvas_size)
-                # Resize glow.gif frames
-                glow_max_size = int(canvas_size * 1.2)  # 20% larger
+                glow_max_size = int(canvas_size * 1.2)
                 self.glow_frames = []
                 glow_gif = Image.open(self.glow_path)
                 for frame in ImageSequence.Iterator(glow_gif):
                     resized_frame = self.resize_image_to_fit(frame.convert("RGBA"), glow_max_size, glow_max_size)
                     self.glow_frames.append(resized_frame)
-                # Update current glow frame
                 rotated_glow = self.glow_frames[self.glow_frame_index].rotate(self.glow_angle, resample=Image.Resampling.BICUBIC, expand=False)
                 self.glow_tk = ImageTk.PhotoImage(rotated_glow)
                 self.image_canvas.coords(self.glow_item, canvas_size // 2, canvas_size // 2)
                 self.image_canvas.itemconfig(self.glow_item, image=self.glow_tk)
-                # Resize oracle.png
                 oracle_original = Image.open(self.image_path).convert("RGBA")
                 self.oracle_image = self.resize_image_to_fit(oracle_original, canvas_size, canvas_size)
                 self.oracle_tk = ImageTk.PhotoImage(self.oracle_image)
@@ -500,7 +485,7 @@ class InfiniteOracleGUI(tk.Tk):
 
         self.left_frame = tk.Frame(self, bg="#2b2b2b")
         self.left_frame.grid(row=0, column=0, sticky="nsew", padx=10, pady=10)
-        self.left_frame.bind("<Configure>", self.update_canvas_size)  # Bind resize event
+        self.left_frame.bind("<Configure>", self.update_canvas_size)
 
         tk.Label(self.left_frame, text="Server Type:", bg="#2b2b2b", fg="white").pack(pady=5)
         self.server_type_menu = tk.OptionMenu(self.left_frame, self.server_type_var, "Ollama", "LM Studio")
@@ -549,8 +534,7 @@ class InfiniteOracleGUI(tk.Tk):
         self.reverb_slider.set(self.config["Ollama"]["reverb"])
         self.reverb_slider.pack()
 
-        # Canvas for spinning oracle.png and animated glow.gif
-        canvas_size = 200  # Initial size for oracle.png
+        canvas_size = 200
         self.image_canvas = tk.Canvas(self.left_frame, width=canvas_size, height=canvas_size, bg="#2b2b2b", highlightthickness=0)
         self.image_canvas.pack(pady=10, anchor="center")
         try:
@@ -558,18 +542,15 @@ class InfiniteOracleGUI(tk.Tk):
                 base_path = sys._MEIPASS
             else:
                 base_path = os.path.dirname(os.path.abspath(__file__))
-            # Load glow.gif (initial frame)
             self.glow_tk = ImageTk.PhotoImage(self.glow_frames[0])
             self.glow_item = self.image_canvas.create_image(canvas_size // 2, canvas_size // 2, image=self.glow_tk)
-            # Load oracle.png
             self.image_path = os.path.join(base_path, "oracle.png")
             oracle_original = Image.open(self.image_path).convert("RGBA")
             self.oracle_image = self.resize_image_to_fit(oracle_original, canvas_size, canvas_size)
             self.oracle_tk = ImageTk.PhotoImage(self.oracle_image)
             self.oracle_item = self.image_canvas.create_image(canvas_size // 2, canvas_size // 2, image=self.oracle_tk)
-            logger.info(f"Loaded glow.gif and oracle.png from {base_path}")
         except Exception as e:
-            logger.error(f"Failed to load images: {e}")
+            logger.error(f"Image load failed: {e}")
             self.image_canvas.create_text(canvas_size // 2, canvas_size // 2, text="Image Load Failed", fill="white")
 
         right_frame = tk.Frame(self, bg="#2b2b2b")
@@ -651,24 +632,19 @@ class InfiniteOracleGUI(tk.Tk):
         self.console_text.pack(fill=tk.BOTH, expand=True)
 
     def animate_gif(self):
-        """Cycle through glow.gif frames for animation."""
         if self.glow_frames:
             self.glow_frame_index = (self.glow_frame_index + 1) % len(self.glow_frames)
-            # Apply current rotation to the new frame
             rotated_glow = self.glow_frames[self.glow_frame_index].rotate(self.glow_angle, resample=Image.Resampling.BICUBIC, expand=False)
             self.glow_tk = ImageTk.PhotoImage(rotated_glow)
             self.image_canvas.itemconfig(self.glow_item, image=self.glow_tk)
-        self.after(100, self.animate_gif)  # Adjust delay (100ms) to match GIF speed
+        self.after(100, self.animate_gif)
 
     def animate_images(self):
-        """Rotate oracle.png clockwise and glow.gif counterclockwise during audio playback."""
         if self.is_audio_playing:
-            # Rotate oracle.png clockwise
             self.oracle_angle = (self.oracle_angle - self.image_spin_speed) % 360
             rotated_oracle = self.oracle_image.rotate(self.oracle_angle, resample=Image.Resampling.BICUBIC, expand=False)
             self.oracle_tk = ImageTk.PhotoImage(rotated_oracle)
             self.image_canvas.itemconfig(self.oracle_item, image=self.oracle_tk)
-            # Rotate glow.gif counterclockwise
             self.glow_angle = (self.glow_angle + self.image_spin_speed) % 360
             rotated_glow = self.glow_frames[self.glow_frame_index].rotate(self.glow_angle, resample=Image.Resampling.BICUBIC, expand=False)
             self.glow_tk = ImageTk.PhotoImage(rotated_glow)
@@ -811,7 +787,7 @@ class InfiniteOracleGUI(tk.Tk):
                     if os.path.exists(wav_path):
                         os.remove(wav_path)
                 except Exception as e:
-                    logger.error(f"Error cleaning up audio queue file: {e}")
+                    logger.error(f"Audio queue cleanup error: {e}")
             while not self.send_wisdom_queue.empty():
                 self.send_wisdom_queue.get_nowait()
             while not self.send_audio_queue.empty():
@@ -820,7 +796,7 @@ class InfiniteOracleGUI(tk.Tk):
                     if os.path.exists(wav_path):
                         os.remove(wav_path)
                 except Exception as e:
-                    logger.error(f"Error cleaning up send audio queue file: {e}")
+                    logger.error(f"Send audio queue cleanup error: {e}")
 
             if self.session:
                 self.session.close()
@@ -851,7 +827,6 @@ class InfiniteOracleGUI(tk.Tk):
             self.retries_slider.config(state=tk.NORMAL)
             server_type = self.server_type_var.get()
             self.max_tokens_entry.config(state=tk.NORMAL if server_type != "Ollama" else tk.DISABLED, bg="white" if server_type != "Ollama" else "grey")
-            logger.info("Oracle stopped.")
 
     def send_prompt_action(self):
         if not self.send_enabled or self.start_lock:
@@ -892,7 +867,6 @@ class InfiniteOracleGUI(tk.Tk):
         with history_lock:
             global conversation_history
             conversation_history = []
-        logger.info("Conversation history cleared.")
         print("The Infinite Oracle’s memory has been wiped clean.")
 
     def toggle_remember(self):
@@ -901,23 +875,19 @@ class InfiniteOracleGUI(tk.Tk):
                 global conversation_history
                 conversation_history = []
             self.clear_button.config(state=tk.DISABLED)
-            logger.info("History disabled and cleared.")
             print("The Infinite Oracle will forget all past wisdom.")
         else:
             self.clear_button.config(state=tk.NORMAL)
-            logger.info("History enabled.")
             print("The Infinite Oracle will now remember its wisdom.")
 
     def toggle_record(self):
         if self.record_var.get():
             self.record_var.set(False)
             self.record_button.config(bg="red", relief=tk.RAISED)
-            logger.info("Recording stopped.")
             print("The Infinite Oracle’s voice will no longer be captured.")
         else:
             self.record_var.set(True)
             self.record_button.config(bg="#ff4040", relief=tk.SUNKEN)
-            logger.info("Recording started.")
             print("The Infinite Oracle’s wisdom will now be preserved.")
 
 def main():
@@ -928,4 +898,4 @@ if __name__ == "__main__":
     try:
         main()
     except KeyboardInterrupt:
-        logger.info("\nThe Infinite Oracle rests... for now.")
+        print("\nThe Infinite Oracle rests... for now.")
