@@ -135,39 +135,40 @@ def generate_wisdom(gui, wisdom_queue, model, server_type, stop_event, get_reque
 
 def send_prompt(session, wisdom_queue, model, server_type, prompt, gui, timeout):
     global conversation_history
-    with history_lock:
-        if not gui.remember_var.get():
-            conversation_history = []
-        messages = [{"role": "system", "content": SYSTEM_PROMPT}] + conversation_history + [{"role": "user", "content": prompt}]
-    payload = {
-        "model": model,
-        "messages": messages,
-        "stream": False
-    }
-    if server_type != "Ollama":
-        payload["max_tokens"] = int(gui.max_tokens_entry.get())
-        payload["temperature"] = 0.7
-    
-    try:
-        response = session.post(SERVER_URL, json=payload, timeout=timeout)
-        response.raise_for_status()
-        data = response.json()
-        wisdom = (
-            data.get("message", {}).get("content", "").strip() if server_type == "Ollama"
-            else data.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
-        )
-        if wisdom:
-            print(f"The Infinite Oracle speaks: {wisdom}", end="\n\n")
-            with history_lock:
-                if gui.remember_var.get():
-                    conversation_history.append({"role": "user", "content": prompt})
-                    conversation_history.append({"role": "assistant", "content": wisdom})
-            wisdom_queue.put(wisdom)
-    except requests.RequestException as e:
-        logger.error(f"{server_type} connection error in send_prompt: {e}")
-    finally:
-        session.close()
-        gui.after(0, lambda: gui.enable_send_and_start())
+    with gui.send_lock:  # Acquire lock to ensure Send completes
+        with history_lock:
+            if not gui.remember_var.get():
+                conversation_history = []
+            messages = [{"role": "system", "content": SYSTEM_PROMPT}] + conversation_history + [{"role": "user", "content": prompt}]
+        payload = {
+            "model": model,
+            "messages": messages,
+            "stream": False
+        }
+        if server_type != "Ollama":
+            payload["max_tokens"] = int(gui.max_tokens_entry.get())
+            payload["temperature"] = 0.7
+        
+        try:
+            response = session.post(SERVER_URL, json=payload, timeout=timeout)
+            response.raise_for_status()
+            data = response.json()
+            wisdom = (
+                data.get("message", {}).get("content", "").strip() if server_type == "Ollama"
+                else data.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+            )
+            if wisdom:
+                print(f"The Infinite Oracle speaks: {wisdom}", end="\n\n")
+                with history_lock:
+                    if gui.remember_var.get():
+                        conversation_history.append({"role": "user", "content": prompt})
+                        conversation_history.append({"role": "assistant", "content": wisdom})
+                wisdom_queue.put(wisdom)
+        except requests.RequestException as e:
+            logger.error(f"{server_type} connection error in send_prompt: {e}")
+        finally:
+            session.close()
+            gui.after(0, lambda: gui.enable_send_and_start())
 
 def text_to_speech(wisdom_queue, audio_queue, get_speaker_id_func, pitch_func, stop_event):
     while not stop_event.is_set():
@@ -383,6 +384,7 @@ class InfiniteOracleGUI(tk.Tk):
         self.send_tts_thread = None
         self.send_playback_thread = None
         self.send_enabled = True
+        self.send_lock = threading.Lock()  # New lock for Send synchronization
         self.url_modified = False
         self.remember_var = tk.BooleanVar(value=True)
         self.record_var = tk.BooleanVar(value=False)
@@ -650,36 +652,37 @@ class InfiniteOracleGUI(tk.Tk):
             self.after(0, self.enable_send_and_start)
             return
 
-        self.stop_oracle()
+        with self.send_lock:  # Wait for any Send to complete
+            self.stop_oracle()
 
-        if not self.verify_server(SERVER_URL, server_type, model):
-            self.start_lock = False
-            self.after(0, self.enable_send_and_start)
-            return
+            if not self.verify_server(SERVER_URL, server_type, model):
+                self.start_lock = False
+                self.after(0, self.enable_send_and_start)
+                return
 
-        self.is_running = True
-        self.stop_event.clear()
-        self.stop_button.config(state=tk.NORMAL, bg="red")
+            self.is_running = True
+            self.stop_event.clear()
+            self.stop_button.config(state=tk.NORMAL, bg="red")
 
-        self.generator_thread = threading.Thread(
-            target=generate_wisdom,
-            args=(self, self.wisdom_queue, model, server_type, self.stop_event, self.request_interval_slider.get),
-            daemon=True
-        )
-        self.tts_thread = threading.Thread(
-            target=text_to_speech,
-            args=(self.wisdom_queue, self.audio_queue, lambda: self.speaker_id_var.get(), self.pitch_slider.get, self.stop_event),
-            daemon=True
-        )
-        self.playback_thread = threading.Thread(
-            target=play_audio,
-            args=(self.audio_queue, self.stop_event, self.interval_slider.get, self.variation_slider.get, self, True),
-            daemon=True
-        )
+            self.generator_thread = threading.Thread(
+                target=generate_wisdom,
+                args=(self, self.wisdom_queue, model, server_type, self.stop_event, self.request_interval_slider.get),
+                daemon=True
+            )
+            self.tts_thread = threading.Thread(
+                target=text_to_speech,
+                args=(self.wisdom_queue, self.audio_queue, lambda: self.speaker_id_var.get(), self.pitch_slider.get, self.stop_event),
+                daemon=True
+            )
+            self.playback_thread = threading.Thread(
+                target=play_audio,
+                args=(self.audio_queue, self.stop_event, self.interval_slider.get, self.variation_slider.get, self, True),
+                daemon=True
+            )
 
-        self.generator_thread.start()
-        self.tts_thread.start()
-        self.playback_thread.start()
+            self.generator_thread.start()
+            self.tts_thread.start()
+            self.playback_thread.start()
 
         self.after(500, lambda: setattr(self, 'start_lock', False))
 
