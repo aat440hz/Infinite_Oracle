@@ -529,7 +529,7 @@ class InfiniteOracleGUI(tk.Tk):
         request_interval_frame = tk.Frame(start_mode_frame, bg="#2b2b2b")
         request_interval_frame.pack(side=tk.LEFT, padx=5)
         tk.Label(request_interval_frame, text="Request Interval (seconds):", bg="#2b2b2b", fg="white").pack()
-        self.request_interval_slider = tk.Scale(request_interval_frame, from_=0.5, to=60, resolution=0.5, orient=tk.HORIZONTAL)
+        self.request_interval_slider = tk.Scale(request_interval_frame, from_=0.5, to=240, resolution=0.5, orient=tk.HORIZONTAL)
         self.request_interval_slider.set(self.config["Ollama"]["request_interval"])
         self.request_interval_slider.pack()
 
