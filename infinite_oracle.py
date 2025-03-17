@@ -22,7 +22,7 @@ from PIL import Image, ImageTk
 
 # Server defaults
 DEFAULT_OLLAMA_URL = "http://localhost:11434/api/chat"
-DEFAULT_LM_STUDIO_URL = "http://localhost:1234/v1/chat/completions"  # Corrected from localhost1
+DEFAULT_LM_STUDIO_URL = "http://localhost:1234/v1/chat/completions"
 DEFAULT_OLLAMA_MODEL = "llama3.2:latest"
 DEFAULT_LM_STUDIO_MODEL = "qwen2.5-1.5b-instruct"
 DEFAULT_TTS_URL = "http://localhost:5002/api/tts"
@@ -108,7 +108,6 @@ def generate_wisdom(gui, wisdom_queue, model, server_type, stop_event, get_reque
             payload["max_tokens"] = int(gui.max_tokens_entry.get())
             payload["temperature"] = 0.7
         
-        # No retries for Start mode
         session = setup_session(SERVER_URL, retries=0)
         try:
             response = session.post(SERVER_URL, json=payload, timeout=gui.timeout_slider.get())
@@ -131,7 +130,6 @@ def generate_wisdom(gui, wisdom_queue, model, server_type, stop_event, get_reque
         finally:
             session.close()
         
-        # Always wait the full interval
         if not stop_event.is_set():
             time.sleep(get_request_interval_func())
 
@@ -220,8 +218,8 @@ def apply_reverb(audio, reverb_value):
     if reverb_value <= 0:
         return audio
     reverb_factor = reverb_value / 5.0
-    delay_ms = 20 + (reverb_factor * 40)  # 20-60ms
-    gain_db = -20 + (reverb_factor * 8)   # -20 to -12dB
+    delay_ms = 20 + (reverb_factor * 40)
+    gain_db = -20 + (reverb_factor * 8)
     echo = audio[:].fade_in(10).fade_out(50)
     echo = echo - abs(gain_db)
     silence = AudioSegment.silent(duration=int(delay_ms))
@@ -238,6 +236,7 @@ def play_audio(audio_queue, stop_event, get_interval_func, get_variation_func, g
             wisdom, wav_path, pitch = audio_queue.get()
             with playback_lock:
                 if not stop_event.is_set():
+                    gui.is_audio_playing = True  # Start spinning
                     audio = AudioSegment.from_wav(wav_path)
                     
                     if pitch != 0:
@@ -263,6 +262,7 @@ def play_audio(audio_queue, stop_event, get_interval_func, get_variation_func, g
 
                     logger.info(f"Playing audio for: {wisdom[:50]}... (Pitch: {pitch}, Reverb: {reverb_value})")
                     play(audio)
+                    gui.is_audio_playing = False  # Stop spinning
             os.remove(wav_path)
             audio_queue.task_done()
             interval = max(0.1, get_interval_func() + random.uniform(-get_variation_func(), get_variation_func())) if is_start_mode else 0
@@ -274,6 +274,7 @@ def play_audio(audio_queue, stop_event, get_interval_func, get_variation_func, g
             logger.error(f"Playback error: {e}")
             if os.path.exists(wav_path):
                 os.remove(wav_path)
+            gui.is_audio_playing = False  # Stop spinning on error
 
 def load_config():
     defaults = {
@@ -353,8 +354,8 @@ class InfiniteOracleGUI(tk.Tk):
                 base_path = sys._MEIPASS
             else:
                 base_path = os.path.dirname(os.path.abspath(__file__))
-            icon_path = os.path.join(base_path, "oracle.ico")
-            img = Image.open(icon_path)
+            icon_path = os.path.join(base_path, "oracle.png")
+            img = Image.open(icon_path).convert("RGBA")
             icon = ImageTk.PhotoImage(img)
             self.iconphoto(True, icon)
             print(f"Icon loaded successfully from {icon_path}")
@@ -385,6 +386,9 @@ class InfiniteOracleGUI(tk.Tk):
         self.url_modified = False
         self.remember_var = tk.BooleanVar(value=True)
         self.record_var = tk.BooleanVar(value=False)
+        self.is_audio_playing = False
+        self.rotation_angle = 0
+        self.image_spin_speed = 5
 
         self.create_widgets()
         sys.stdout = ConsoleRedirector(self.console_text)
@@ -426,6 +430,14 @@ class InfiniteOracleGUI(tk.Tk):
             self.max_tokens_entry.config(state=tk.DISABLED, bg="grey")
         self.url_modified = False
         logger.info(f"Loaded config for {server_type} from {CONFIG_FILE}")
+
+    def resize_image_to_fit(self, image, max_width, max_height):
+        """Resize image to fit within max_width x max_height while preserving aspect ratio."""
+        original_width, original_height = image.size
+        ratio = min(max_width / original_width, max_height / original_height)
+        new_width = int(original_width * ratio)
+        new_height = int(original_height * ratio)
+        return image.resize((new_width, new_height), Image.Resampling.LANCZOS)
 
     def create_widgets(self):
         self.configure(bg="#2b2b2b")
@@ -491,10 +503,31 @@ class InfiniteOracleGUI(tk.Tk):
         right_frame.rowconfigure(0, weight=0)
         right_frame.rowconfigure(1, weight=0)
         right_frame.rowconfigure(2, weight=0)
-        right_frame.rowconfigure(3, weight=1)
+        right_frame.rowconfigure(3, weight=0)  # Adjusted for extra row
+        right_frame.rowconfigure(4, weight=1)
+
+        # Spinning image canvas in top-right of right_frame
+        canvas_size = 100
+        self.image_canvas = tk.Canvas(right_frame, width=canvas_size, height=canvas_size, bg="#2b2b2b", highlightthickness=0)
+        self.image_canvas.grid(row=0, column=0, sticky="ne", pady=5)
+        try:
+            if getattr(sys, 'frozen', False):
+                base_path = sys._MEIPASS
+            else:
+                base_path = os.path.dirname(os.path.abspath(__file__))
+            image_path = os.path.join(base_path, "oracle.png")
+            original = Image.open(image_path).convert("RGBA")
+            self.original_image = self.resize_image_to_fit(original, canvas_size, canvas_size)
+            self.tk_image = ImageTk.PhotoImage(self.original_image)
+            self.canvas_image = self.image_canvas.create_image(canvas_size // 2, canvas_size // 2, image=self.tk_image)
+            logger.info(f"Loaded spinning image from {image_path}")
+        except Exception as e:
+            logger.error(f"Failed to load image: {e}")
+            self.image_canvas.create_text(canvas_size // 2, canvas_size // 2, text="Image Load Failed", fill="white")
+        self.animate_image()
 
         slider_frame = tk.Frame(right_frame, bg="#2b2b2b")
-        slider_frame.grid(row=0, column=0, sticky="ew", pady=5)
+        slider_frame.grid(row=1, column=0, sticky="ew", pady=5)
 
         timeout_frame = tk.Frame(slider_frame, bg="#2b2b2b")
         timeout_frame.pack(side=tk.LEFT, padx=5)
@@ -511,7 +544,7 @@ class InfiniteOracleGUI(tk.Tk):
         self.retries_slider.pack()
 
         start_mode_frame = tk.LabelFrame(right_frame, text="Start Mode Settings", bg="#2b2b2b", fg="white", padx=5, pady=5)
-        start_mode_frame.grid(row=1, column=0, sticky="ew", pady=5)
+        start_mode_frame.grid(row=2, column=0, sticky="ew", pady=5)
 
         interval_frame = tk.Frame(start_mode_frame, bg="#2b2b2b")
         interval_frame.pack(side=tk.LEFT, padx=5)
@@ -543,7 +576,7 @@ class InfiniteOracleGUI(tk.Tk):
         self.max_tokens_entry.config(state=tk.DISABLED if self.server_type_var.get() == "Ollama" else tk.NORMAL)
 
         button_frame = tk.Frame(right_frame, bg="#2b2b2b")
-        button_frame.grid(row=2, column=0, sticky="ew", pady=5)
+        button_frame.grid(row=3, column=0, sticky="ew", pady=5)
         self.start_button = tk.Button(button_frame, text="Start", command=self.start_oracle)
         self.start_button.pack(side=tk.LEFT, padx=5)
         self.stop_button = tk.Button(button_frame, text="Stop", command=self.stop_oracle, state=tk.DISABLED, bg="lightgray")
@@ -558,10 +591,19 @@ class InfiniteOracleGUI(tk.Tk):
         self.record_button.pack(side=tk.LEFT, padx=5)
 
         console_frame = tk.Frame(right_frame, bg="#2b2b2b")
-        console_frame.grid(row=3, column=0, sticky="nsew")
+        console_frame.grid(row=4, column=0, sticky="nsew")
         tk.Label(console_frame, text="Console Output:", bg="#2b2b2b", fg="white").pack()
         self.console_text = scrolledtext.ScrolledText(console_frame, height=30, width=60, state='disabled', bg="black", fg="green")
         self.console_text.pack(fill=tk.BOTH, expand=True)
+
+    def animate_image(self):
+        """Rotate the image clockwise if audio is playing."""
+        if self.is_audio_playing:
+            self.rotation_angle = (self.rotation_angle - self.image_spin_speed) % 360
+            rotated_image = self.original_image.rotate(self.rotation_angle, resample=Image.Resampling.BICUBIC, expand=False)
+            self.tk_image = ImageTk.PhotoImage(rotated_image)
+            self.image_canvas.itemconfig(self.canvas_image, image=self.tk_image)
+        self.after(50, self.animate_image)
 
     def disable_controls(self):
         self.start_button.config(state=tk.DISABLED)
