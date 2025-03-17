@@ -42,7 +42,7 @@ logger = logging.getLogger("InfiniteOracle")
 
 # Global playback lock and conversation history
 playback_lock = threading.Lock()
-history_lock = threading.Lock()  # Added for thread-safe history management
+history_lock = threading.Lock()
 conversation_history = []
 
 class ConsoleRedirector:
@@ -92,10 +92,12 @@ def ping_server(server_url, server_type, model, timeout, retries):
     finally:
         session.close()
 
-def generate_wisdom(session, wisdom_queue, model, server_type, stop_event, get_request_interval_func, timeout):
+def generate_wisdom(gui, wisdom_queue, model, server_type, stop_event, get_request_interval_func):
     global conversation_history
     while not stop_event.is_set():
-        with history_lock:  # Lock history access
+        with history_lock:
+            if not gui.remember_var.get():  # If "Remember" is unchecked, clear history each time
+                conversation_history = []
             messages = [{"role": "system", "content": SYSTEM_PROMPT}] + conversation_history + [{"role": "user", "content": "Provide your wisdom."}]
         payload = {
             "model": model,
@@ -106,8 +108,9 @@ def generate_wisdom(session, wisdom_queue, model, server_type, stop_event, get_r
             payload["max_tokens"] = 300
             payload["temperature"] = 0.7
         
+        session = setup_session(SERVER_URL, gui.retries_slider.get())
         try:
-            response = session.post(SERVER_URL, json=payload, timeout=timeout)
+            response = session.post(SERVER_URL, json=payload, timeout=gui.timeout_slider.get())
             response.raise_for_status()
             data = response.json()
             wisdom = (
@@ -117,19 +120,25 @@ def generate_wisdom(session, wisdom_queue, model, server_type, stop_event, get_r
             if wisdom and not stop_event.is_set():
                 logger.info(f"Generated wisdom (length: {len(wisdom)} chars): {wisdom}")
                 print(f"The Infinite Oracle speaks: {wisdom}", end="\n\n")
-                with history_lock:  # Lock history modification
-                    conversation_history.append({"role": "user", "content": "Provide your wisdom."})
-                    conversation_history.append({"role": "assistant", "content": wisdom})
+                with history_lock:
+                    if gui.remember_var.get():  # Only append if "Remember" is checked
+                        conversation_history.append({"role": "user", "content": "Provide your wisdom."})
+                        conversation_history.append({"role": "assistant", "content": wisdom})
                 wisdom_queue.put(wisdom)
         except requests.RequestException as e:
             logger.error(f"{server_type} connection error: {e}")
             print(f"{server_type} error: {str(e)}. Retrying in {get_request_interval_func()}s...")
+        finally:
+            session.close()
+        
         interval = max(0.1, get_request_interval_func())
         time.sleep(interval)
 
 def send_prompt(session, wisdom_queue, model, server_type, prompt, gui, timeout):
     global conversation_history
-    with history_lock:  # Lock history access
+    with history_lock:
+        if not gui.remember_var.get():  # If "Remember" is unchecked, clear history
+            conversation_history = []
         messages = [{"role": "system", "content": SYSTEM_PROMPT}] + conversation_history + [{"role": "user", "content": prompt}]
     payload = {
         "model": model,
@@ -151,9 +160,10 @@ def send_prompt(session, wisdom_queue, model, server_type, prompt, gui, timeout)
         if wisdom:
             logger.info(f"Generated wisdom (length: {len(wisdom)} chars): {wisdom}")
             print(f"The Infinite Oracle speaks: {wisdom}", end="\n\n")
-            with history_lock:  # Lock history modification
-                conversation_history.append({"role": "user", "content": prompt})
-                conversation_history.append({"role": "assistant", "content": wisdom})
+            with history_lock:
+                if gui.remember_var.get():  # Only append if "Remember" is checked
+                    conversation_history.append({"role": "user", "content": prompt})
+                    conversation_history.append({"role": "assistant", "content": wisdom})
             wisdom_queue.put(wisdom)
     except requests.RequestException as e:
         logger.error(f"{server_type} connection error in send_prompt: {e}")
@@ -357,6 +367,7 @@ class InfiniteOracleGUI(tk.Tk):
         self.send_playback_thread = None
         self.send_enabled = True
         self.url_modified = False
+        self.remember_var = tk.BooleanVar(value=True)  # New: Remember checkbox, defaults to True
 
         self.create_widgets()
         sys.stdout = ConsoleRedirector(self.console_text)
@@ -515,8 +526,10 @@ class InfiniteOracleGUI(tk.Tk):
         self.stop_button.pack(side=tk.LEFT, padx=5)
         self.save_button = tk.Button(button_frame, text="Save Config", command=self.save_config_action)
         self.save_button.pack(side=tk.LEFT, padx=5)
-        self.clear_button = tk.Button(button_frame, text="Clear History", command=self.clear_history)  # New button
+        self.clear_button = tk.Button(button_frame, text="Clear History", command=self.clear_history)
         self.clear_button.pack(side=tk.LEFT, padx=5)
+        self.remember_check = tk.Checkbutton(button_frame, text="Remember", variable=self.remember_var, command=self.toggle_remember, bg="#2b2b2b", fg="white", selectcolor="black")
+        self.remember_check.pack(side=tk.LEFT, padx=5)
 
         # Console
         console_frame = tk.Frame(right_frame, bg="#2b2b2b")
@@ -529,7 +542,8 @@ class InfiniteOracleGUI(tk.Tk):
         self.start_button.config(state=tk.DISABLED)
         self.send_button.config(state=tk.DISABLED)
         self.save_button.config(state=tk.DISABLED)
-        self.clear_button.config(state=tk.DISABLED)  # Disable clear button
+        self.clear_button.config(state=tk.DISABLED)
+        self.remember_check.config(state=tk.DISABLED)  # Disable checkbox during operations
         self.server_type_menu.config(state=tk.DISABLED)
         self.server_url_entry.config(state=tk.DISABLED)
         self.model_entry.config(state=tk.DISABLED)
@@ -550,7 +564,8 @@ class InfiniteOracleGUI(tk.Tk):
             self.send_button.config(state=tk.NORMAL)
             self.start_button.config(state=tk.NORMAL)
             self.save_button.config(state=tk.NORMAL)
-            self.clear_button.config(state=tk.NORMAL)  # Enable clear button
+            self.clear_button.config(state=tk.NORMAL if self.remember_var.get() else tk.DISABLED)  # Enable only if Remember is checked
+            self.remember_check.config(state=tk.NORMAL)
             self.server_type_menu.config(state=tk.NORMAL)
             self.server_url_entry.config(state=tk.NORMAL)
             self.model_entry.config(state=tk.NORMAL)
@@ -603,7 +618,6 @@ class InfiniteOracleGUI(tk.Tk):
             self.after(0, self.enable_send_and_start)
             return
 
-        self.session = setup_session(SERVER_URL, self.retries_slider.get())
         self.is_running = True
         self.stop_event.clear()
         self.stop_button.config(state=tk.NORMAL, bg="red")
@@ -617,7 +631,7 @@ class InfiniteOracleGUI(tk.Tk):
 
         self.generator_thread = threading.Thread(
             target=generate_wisdom,
-            args=(self.session, self.wisdom_queue, model, server_type, self.stop_event, self.request_interval_slider.get, self.timeout_slider.get()),
+            args=(self, self.wisdom_queue, model, server_type, self.stop_event, self.request_interval_slider.get),
             daemon=True
         )
         self.tts_thread = threading.Thread(
@@ -663,13 +677,14 @@ class InfiniteOracleGUI(tk.Tk):
                 self.session.close()
                 self.session = None
 
-            with history_lock:  # Lock history modification
+            with history_lock:
                 conversation_history = []
 
             self.start_button.config(state=tk.NORMAL)
             self.send_button.config(state=tk.NORMAL)
             self.save_button.config(state=tk.NORMAL)
-            self.clear_button.config(state=tk.NORMAL)  # Enable clear button
+            self.clear_button.config(state=tk.NORMAL if self.remember_var.get() else tk.DISABLED)  # Enable only if Remember is checked
+            self.remember_check.config(state=tk.NORMAL)
             self.server_type_menu.config(state=tk.NORMAL)
             self.server_url_entry.config(state=tk.NORMAL)
             self.model_entry.config(state=tk.NORMAL)
@@ -721,13 +736,27 @@ class InfiniteOracleGUI(tk.Tk):
 
     def clear_history(self):
         """Clear the conversation history safely."""
-        if self.start_lock or not self.send_enabled:  # Prevent clearing during critical operations
+        if self.start_lock or not self.send_enabled:
             return
         with history_lock:
             global conversation_history
             conversation_history = []
         logger.info("Conversation history cleared.")
         print("The Infinite Oracle’s memory has been wiped clean.")
+
+    def toggle_remember(self):
+        """Handle the Remember checkbox toggle."""
+        if not self.remember_var.get():  # If unchecked, clear history and disable Clear History button
+            with history_lock:
+                global conversation_history
+                conversation_history = []
+            self.clear_button.config(state=tk.DISABLED)
+            logger.info("History disabled and cleared.")
+            print("The Infinite Oracle will forget all past wisdom.")
+        else:  # If checked, re-enable Clear History button
+            self.clear_button.config(state=tk.NORMAL)
+            logger.info("History enabled.")
+            print("The Infinite Oracle will now remember its wisdom.")
 
 def main():
     app = InfiniteOracleGUI()
