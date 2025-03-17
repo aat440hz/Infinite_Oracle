@@ -130,8 +130,7 @@ def generate_wisdom(gui, wisdom_queue, model, server_type, stop_event, get_reque
         finally:
             session.close()
         
-        # Throttle based on wisdom length to prevent queue overload
-        interval = max(10.0, get_request_interval_func() + (len(wisdom) / 100))  # 10s base + 1s per 100 chars
+        interval = max(10.0, get_request_interval_func() + (len(wisdom) / 100))
         time.sleep(interval)
 
 def send_prompt(session, wisdom_queue, model, server_type, prompt, gui, timeout):
@@ -343,7 +342,7 @@ class InfiniteOracleGUI(tk.Tk):
         super().__init__()
         self.title("Infinite Oracle Control Panel")
         self.state("zoomed")
-        self.geometry("800x900")
+        self.geometry("1000x1000")
 
         print(f"Current working directory: {os.getcwd()}")
 
@@ -538,7 +537,7 @@ class InfiniteOracleGUI(tk.Tk):
         button_frame.grid(row=2, column=0, sticky="ew", pady=5)
         self.start_button = tk.Button(button_frame, text="Start", command=self.start_oracle)
         self.start_button.pack(side=tk.LEFT, padx=5)
-        self.stop_button = tk.Button(button_frame, text="Stop", command=self.stop_oracle)
+        self.stop_button = tk.Button(button_frame, text="Stop", command=self.stop_oracle, state=tk.DISABLED, bg="lightgray")
         self.stop_button.pack(side=tk.LEFT, padx=5)
         self.save_button = tk.Button(button_frame, text="Save Config", command=self.save_config_action)
         self.save_button.pack(side=tk.LEFT, padx=5)
@@ -640,7 +639,7 @@ class InfiniteOracleGUI(tk.Tk):
 
         self.is_running = True
         self.stop_event.clear()
-        self.stop_button.config(state=tk.NORMAL, bg="red")
+        self.stop_button.config(state=tk.NORMAL, bg="red")  # Enable Stop button when Start mode is active
         self.pitch_slider.config(state=tk.DISABLED)
         self.reverb_slider.config(state=tk.DISABLED)
         self.interval_slider.config(state=tk.DISABLED)
@@ -686,12 +685,28 @@ class InfiniteOracleGUI(tk.Tk):
                 self.playback_thread.join(timeout=1)
                 self.playback_thread = None
 
+            # Clean up wisdom_queue
             while not self.wisdom_queue.empty():
                 self.wisdom_queue.get_nowait()
+            # Clean up audio_queue and delete any remaining temp files
             while not self.audio_queue.empty():
-                _, wav_path, _ = self.audio_queue.get_nowait()
-                if os.path.exists(wav_path):
-                    os.remove(wav_path)
+                try:
+                    _, wav_path, _ = self.audio_queue.get_nowait()
+                    if os.path.exists(wav_path):
+                        os.remove(wav_path)
+                except Exception as e:
+                    logger.error(f"Error cleaning up audio queue file: {e}")
+            # Clean up send_wisdom_queue
+            while not self.send_wisdom_queue.empty():
+                self.send_wisdom_queue.get_nowait()
+            # Clean up send_audio_queue and delete any remaining temp files
+            while not self.send_audio_queue.empty():
+                try:
+                    _, wav_path, _ = self.send_audio_queue.get_nowait()
+                    if os.path.exists(wav_path):
+                        os.remove(wav_path)
+                except Exception as e:
+                    logger.error(f"Error cleaning up send audio queue file: {e}")
 
             if self.session:
                 self.session.close()
@@ -712,7 +727,7 @@ class InfiniteOracleGUI(tk.Tk):
             self.tts_url_entry.config(state=tk.NORMAL)
             self.speaker_id_entry.config(state=tk.NORMAL)
             self.system_prompt_entry.config(state=tk.NORMAL)
-            self.stop_button.config(state=tk.NORMAL, bg="lightgray")
+            self.stop_button.config(state=tk.DISABLED, bg="lightgray")  # Disable Stop button when Start mode stops
             self.pitch_slider.config(state=tk.NORMAL)
             self.reverb_slider.config(state=tk.NORMAL)
             self.interval_slider.config(state=tk.NORMAL)
