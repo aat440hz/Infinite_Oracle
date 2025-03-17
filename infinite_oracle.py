@@ -18,7 +18,7 @@ from pydub import AudioSegment
 from pydub.effects import normalize
 from pydub.playback import play
 import random
-from PIL import Image, ImageTk
+from PIL import Image, ImageTk, ImageSequence
 
 # Server defaults
 DEFAULT_OLLAMA_URL = "http://localhost:11434/api/chat"
@@ -236,7 +236,7 @@ def play_audio(audio_queue, stop_event, get_interval_func, get_variation_func, g
             wisdom, wav_path, pitch = audio_queue.get()
             with playback_lock:
                 if not stop_event.is_set():
-                    gui.is_audio_playing = True  # Start spinning and glowing
+                    gui.is_audio_playing = True  # Start spinning
                     audio = AudioSegment.from_wav(wav_path)
                     
                     if pitch != 0:
@@ -262,7 +262,7 @@ def play_audio(audio_queue, stop_event, get_interval_func, get_variation_func, g
 
                     logger.info(f"Playing audio for: {wisdom[:50]}... (Pitch: {pitch}, Reverb: {reverb_value})")
                     play(audio)
-                    gui.is_audio_playing = False  # Stop spinning and glowing
+                    gui.is_audio_playing = False  # Stop spinning
             os.remove(wav_path)
             audio_queue.task_done()
             interval = max(0.1, get_interval_func() + random.uniform(-get_variation_func(), get_variation_func())) if is_start_mode else 0
@@ -274,7 +274,7 @@ def play_audio(audio_queue, stop_event, get_interval_func, get_variation_func, g
             logger.error(f"Playback error: {e}")
             if os.path.exists(wav_path):
                 os.remove(wav_path)
-            gui.is_audio_playing = False  # Stop spinning and glowing on error
+            gui.is_audio_playing = False  # Stop spinning on error
 
 def load_config():
     defaults = {
@@ -390,8 +390,27 @@ class InfiniteOracleGUI(tk.Tk):
         self.oracle_angle = 0  # For oracle.png rotation (clockwise)
         self.glow_angle = 0    # For glow.gif rotation (counterclockwise)
         self.image_spin_speed = 5
+        self.glow_frames = []  # List of GIF frames
+        self.glow_frame_index = 0  # Current frame index
 
-        self.create_widgets()
+        # Load glow.gif frames
+        try:
+            if getattr(sys, 'frozen', False):
+                base_path = sys._MEIPASS
+            else:
+                base_path = os.path.dirname(os.path.abspath(__file__))
+            self.glow_path = os.path.join(base_path, "glow.gif")
+            glow_gif = Image.open(self.glow_path)
+            glow_max_size = int(200 * 1.2)  # Initial size (20% larger than canvas_size)
+            for frame in ImageSequence.Iterator(glow_gif):
+                resized_frame = self.resize_image_to_fit(frame.convert("RGBA"), glow_max_size, glow_max_size)
+                self.glow_frames.append(resized_frame)
+            logger.info(f"Loaded {len(self.glow_frames)} frames from glow.gif")
+        except Exception as e:
+            logger.error(f"Failed to load glow.gif frames: {e}")
+            self.glow_frames = [Image.new("RGBA", (glow_max_size, glow_max_size), (255, 255, 255, 0))]  # Fallback
+
+        self.create_widgets()  # Set up canvas and items first
         sys.stdout = ConsoleRedirector(self.console_text)
         self.server_type_var.trace("w", lambda *args: self.update_from_config())
 
@@ -407,6 +426,10 @@ class InfiniteOracleGUI(tk.Tk):
         )
         self.send_tts_thread.start()
         self.send_playback_thread.start()
+
+        # Start animation loops after widgets are created
+        self.animate_gif()  # Start GIF animation
+        self.animate_images()  # Start rotation animation
 
     def update_from_config(self):
         self.config = load_config()
@@ -444,14 +467,20 @@ class InfiniteOracleGUI(tk.Tk):
         """Dynamically resize the canvas and images based on left_frame width, with a max cap."""
         if hasattr(self, 'image_canvas'):
             available_width = self.left_frame.winfo_width() - 20  # Padding
-            max_size = 300  # Maximum size (adjustable)
+            max_size = 300  # Maximum size for oracle.png
             canvas_size = min(available_width, max_size)  # Don't exceed max_size
             if canvas_size > 50:  # Minimum size
                 self.image_canvas.config(width=canvas_size, height=canvas_size)
-                # Resize glow.gif
-                glow_original = Image.open(self.glow_path).convert("RGBA")
-                self.glow_image = self.resize_image_to_fit(glow_original, canvas_size, canvas_size)
-                self.glow_tk = ImageTk.PhotoImage(self.glow_image)
+                # Resize glow.gif frames
+                glow_max_size = int(canvas_size * 1.2)  # 20% larger
+                self.glow_frames = []
+                glow_gif = Image.open(self.glow_path)
+                for frame in ImageSequence.Iterator(glow_gif):
+                    resized_frame = self.resize_image_to_fit(frame.convert("RGBA"), glow_max_size, glow_max_size)
+                    self.glow_frames.append(resized_frame)
+                # Update current glow frame
+                rotated_glow = self.glow_frames[self.glow_frame_index].rotate(self.glow_angle, resample=Image.Resampling.BICUBIC, expand=False)
+                self.glow_tk = ImageTk.PhotoImage(rotated_glow)
                 self.image_canvas.coords(self.glow_item, canvas_size // 2, canvas_size // 2)
                 self.image_canvas.itemconfig(self.glow_item, image=self.glow_tk)
                 # Resize oracle.png
@@ -520,8 +549,8 @@ class InfiniteOracleGUI(tk.Tk):
         self.reverb_slider.set(self.config["Ollama"]["reverb"])
         self.reverb_slider.pack()
 
-        # Canvas for spinning oracle.png and glow.gif
-        canvas_size = 200  # Initial size
+        # Canvas for spinning oracle.png and animated glow.gif
+        canvas_size = 200  # Initial size for oracle.png
         self.image_canvas = tk.Canvas(self.left_frame, width=canvas_size, height=canvas_size, bg="#2b2b2b", highlightthickness=0)
         self.image_canvas.pack(pady=10, anchor="center")
         try:
@@ -529,11 +558,8 @@ class InfiniteOracleGUI(tk.Tk):
                 base_path = sys._MEIPASS
             else:
                 base_path = os.path.dirname(os.path.abspath(__file__))
-            # Load glow.gif
-            self.glow_path = os.path.join(base_path, "glow.gif")
-            glow_original = Image.open(self.glow_path).convert("RGBA")
-            self.glow_image = self.resize_image_to_fit(glow_original, canvas_size, canvas_size)
-            self.glow_tk = ImageTk.PhotoImage(self.glow_image)
+            # Load glow.gif (initial frame)
+            self.glow_tk = ImageTk.PhotoImage(self.glow_frames[0])
             self.glow_item = self.image_canvas.create_image(canvas_size // 2, canvas_size // 2, image=self.glow_tk)
             # Load oracle.png
             self.image_path = os.path.join(base_path, "oracle.png")
@@ -541,11 +567,10 @@ class InfiniteOracleGUI(tk.Tk):
             self.oracle_image = self.resize_image_to_fit(oracle_original, canvas_size, canvas_size)
             self.oracle_tk = ImageTk.PhotoImage(self.oracle_image)
             self.oracle_item = self.image_canvas.create_image(canvas_size // 2, canvas_size // 2, image=self.oracle_tk)
-            logger.info(f"Loaded glow.gif from {self.glow_path} and oracle.png from {self.image_path}")
+            logger.info(f"Loaded glow.gif and oracle.png from {base_path}")
         except Exception as e:
             logger.error(f"Failed to load images: {e}")
             self.image_canvas.create_text(canvas_size // 2, canvas_size // 2, text="Image Load Failed", fill="white")
-        self.animate_images()
 
         right_frame = tk.Frame(self, bg="#2b2b2b")
         right_frame.grid(row=0, column=1, rowspan=2, sticky="nsew", padx=10, pady=10)
@@ -625,8 +650,18 @@ class InfiniteOracleGUI(tk.Tk):
         self.console_text = scrolledtext.ScrolledText(console_frame, height=30, width=60, state='disabled', bg="black", fg="green")
         self.console_text.pack(fill=tk.BOTH, expand=True)
 
+    def animate_gif(self):
+        """Cycle through glow.gif frames for animation."""
+        if self.glow_frames:
+            self.glow_frame_index = (self.glow_frame_index + 1) % len(self.glow_frames)
+            # Apply current rotation to the new frame
+            rotated_glow = self.glow_frames[self.glow_frame_index].rotate(self.glow_angle, resample=Image.Resampling.BICUBIC, expand=False)
+            self.glow_tk = ImageTk.PhotoImage(rotated_glow)
+            self.image_canvas.itemconfig(self.glow_item, image=self.glow_tk)
+        self.after(100, self.animate_gif)  # Adjust delay (100ms) to match GIF speed
+
     def animate_images(self):
-        """Rotate oracle.png clockwise and glow.gif counterclockwise when audio is playing."""
+        """Rotate oracle.png clockwise and glow.gif counterclockwise during audio playback."""
         if self.is_audio_playing:
             # Rotate oracle.png clockwise
             self.oracle_angle = (self.oracle_angle - self.image_spin_speed) % 360
@@ -635,12 +670,9 @@ class InfiniteOracleGUI(tk.Tk):
             self.image_canvas.itemconfig(self.oracle_item, image=self.oracle_tk)
             # Rotate glow.gif counterclockwise
             self.glow_angle = (self.glow_angle + self.image_spin_speed) % 360
-            rotated_glow = self.glow_image.rotate(self.glow_angle, resample=Image.Resampling.BICUBIC, expand=False)
+            rotated_glow = self.glow_frames[self.glow_frame_index].rotate(self.glow_angle, resample=Image.Resampling.BICUBIC, expand=False)
             self.glow_tk = ImageTk.PhotoImage(rotated_glow)
             self.image_canvas.itemconfig(self.glow_item, image=self.glow_tk)
-            self.image_canvas.itemconfig(self.glow_item, state=tk.NORMAL)  # Show glow
-        else:
-            self.image_canvas.itemconfig(self.glow_item, state=tk.HIDDEN)  # Hide glow
         self.after(50, self.animate_images)
 
     def disable_controls(self):
