@@ -439,6 +439,21 @@ class InfiniteOracleGUI(tk.Tk):
         new_height = int(original_height * ratio)
         return image.resize((new_width, new_height), Image.Resampling.LANCZOS)
 
+    def update_canvas_size(self, event=None):
+        """Dynamically resize the canvas and image based on left_frame width, with a max cap."""
+        if hasattr(self, 'image_canvas'):
+            # Get the frame width, but cap it to fit like other widgets
+            available_width = self.left_frame.winfo_width() - 20  # Padding
+            max_size = 300  # Maximum size (adjustable)
+            canvas_size = min(available_width, max_size)  # Don't exceed max_size
+            if canvas_size > 50:  # Minimum size
+                self.image_canvas.config(width=canvas_size, height=canvas_size)
+                original = Image.open(self.image_path).convert("RGBA")
+                self.original_image = self.resize_image_to_fit(original, canvas_size, canvas_size)
+                self.tk_image = ImageTk.PhotoImage(self.original_image)
+                self.image_canvas.coords(self.canvas_image, canvas_size // 2, canvas_size // 2)
+                self.image_canvas.itemconfig(self.canvas_image, image=self.tk_image)
+
     def create_widgets(self):
         self.configure(bg="#2b2b2b")
 
@@ -447,31 +462,32 @@ class InfiniteOracleGUI(tk.Tk):
         self.rowconfigure(0, weight=0)
         self.rowconfigure(1, weight=1)
 
-        left_frame = tk.Frame(self, bg="#2b2b2b")
-        left_frame.grid(row=0, column=0, sticky="nsew", padx=10, pady=10)
+        self.left_frame = tk.Frame(self, bg="#2b2b2b")
+        self.left_frame.grid(row=0, column=0, sticky="nsew", padx=10, pady=10)
+        self.left_frame.bind("<Configure>", self.update_canvas_size)  # Bind resize event
 
-        tk.Label(left_frame, text="Server Type:", bg="#2b2b2b", fg="white").pack(pady=5)
-        self.server_type_menu = tk.OptionMenu(left_frame, self.server_type_var, "Ollama", "LM Studio")
+        tk.Label(self.left_frame, text="Server Type:", bg="#2b2b2b", fg="white").pack(pady=5)
+        self.server_type_menu = tk.OptionMenu(self.left_frame, self.server_type_var, "Ollama", "LM Studio")
         self.server_type_menu.pack(pady=5)
 
-        tk.Label(left_frame, text="Server URL:", bg="#2b2b2b", fg="white").pack(pady=5)
-        self.server_url_entry = tk.Entry(left_frame, textvariable=self.server_url_var, width=40)
+        tk.Label(self.left_frame, text="Server URL:", bg="#2b2b2b", fg="white").pack(pady=5)
+        self.server_url_entry = tk.Entry(self.left_frame, textvariable=self.server_url_var, width=40)
         self.server_url_entry.pack(pady=5)
         self.server_url_entry.bind("<KeyRelease>", lambda e: setattr(self, 'url_modified', True))
 
-        tk.Label(left_frame, text="Model Name:", bg="#2b2b2b", fg="white").pack(pady=5)
-        self.model_entry = tk.Entry(left_frame, textvariable=self.model_var, width=40)
+        tk.Label(self.left_frame, text="Model Name:", bg="#2b2b2b", fg="white").pack(pady=5)
+        self.model_entry = tk.Entry(self.left_frame, textvariable=self.model_var, width=40)
         self.model_entry.pack(pady=5)
 
-        tk.Label(left_frame, text="Coqui TTS Server URL:", bg="#2b2b2b", fg="white").pack(pady=5)
-        self.tts_url_entry = tk.Entry(left_frame, textvariable=self.tts_url_var, width=40)
+        tk.Label(self.left_frame, text="Coqui TTS Server URL:", bg="#2b2b2b", fg="white").pack(pady=5)
+        self.tts_url_entry = tk.Entry(self.left_frame, textvariable=self.tts_url_var, width=40)
         self.tts_url_entry.pack(pady=5)
 
-        tk.Label(left_frame, text="Speaker ID (e.g., p267):", bg="#2b2b2b", fg="white").pack(pady=5)
-        self.speaker_id_entry = tk.Entry(left_frame, textvariable=self.speaker_id_var, width=40)
+        tk.Label(self.left_frame, text="Speaker ID (e.g., p267):", bg="#2b2b2b", fg="white").pack(pady=5)
+        self.speaker_id_entry = tk.Entry(self.left_frame, textvariable=self.speaker_id_var, width=40)
         self.speaker_id_entry.pack(pady=5)
 
-        prompt_frame = tk.Frame(left_frame, bg="#2b2b2b")
+        prompt_frame = tk.Frame(self.left_frame, bg="#2b2b2b")
         prompt_frame.pack(pady=5, fill=tk.X)
         tk.Label(prompt_frame, text="System Prompt:", bg="#2b2b2b", fg="white").pack(anchor=tk.W)
         self.system_prompt_entry = tk.Text(prompt_frame, height=10, width=40)
@@ -480,7 +496,7 @@ class InfiniteOracleGUI(tk.Tk):
         self.send_button = tk.Button(prompt_frame, text="Send", command=self.send_prompt_action)
         self.send_button.pack(side=tk.RIGHT, padx=5)
 
-        effects_frame = tk.LabelFrame(left_frame, text="Effects", bg="#2b2b2b", fg="white", padx=5, pady=5)
+        effects_frame = tk.LabelFrame(self.left_frame, text="Effects", bg="#2b2b2b", fg="white", padx=5, pady=5)
         effects_frame.pack(pady=5, fill=tk.X)
 
         pitch_frame = tk.Frame(effects_frame, bg="#2b2b2b")
@@ -497,37 +513,36 @@ class InfiniteOracleGUI(tk.Tk):
         self.reverb_slider.set(self.config["Ollama"]["reverb"])
         self.reverb_slider.pack()
 
+        # Spinning image canvas centered below Effects, starting smaller
+        canvas_size = 200  # Initial size, will be capped by update_canvas_size
+        self.image_canvas = tk.Canvas(self.left_frame, width=canvas_size, height=canvas_size, bg="#2b2b2b", highlightthickness=0)
+        self.image_canvas.pack(pady=10, anchor="center")
+        try:
+            if getattr(sys, 'frozen', False):
+                base_path = sys._MEIPASS
+            else:
+                base_path = os.path.dirname(os.path.abspath(__file__))
+            self.image_path = os.path.join(base_path, "oracle.png")
+            original = Image.open(self.image_path).convert("RGBA")
+            self.original_image = self.resize_image_to_fit(original, canvas_size, canvas_size)
+            self.tk_image = ImageTk.PhotoImage(self.original_image)
+            self.canvas_image = self.image_canvas.create_image(canvas_size // 2, canvas_size // 2, image=self.tk_image)
+            logger.info(f"Loaded spinning image from {self.image_path}")
+        except Exception as e:
+            logger.error(f"Failed to load image: {e}")
+            self.image_canvas.create_text(canvas_size // 2, canvas_size // 2, text="Image Load Failed", fill="white")
+        self.animate_image()
+
         right_frame = tk.Frame(self, bg="#2b2b2b")
         right_frame.grid(row=0, column=1, rowspan=2, sticky="nsew", padx=10, pady=10)
         right_frame.columnconfigure(0, weight=1)
         right_frame.rowconfigure(0, weight=0)
         right_frame.rowconfigure(1, weight=0)
         right_frame.rowconfigure(2, weight=0)
-        right_frame.rowconfigure(3, weight=0)  # Adjusted for extra row
-        right_frame.rowconfigure(4, weight=1)
-
-        # Spinning image canvas in top-right of right_frame
-        canvas_size = 100
-        self.image_canvas = tk.Canvas(right_frame, width=canvas_size, height=canvas_size, bg="#2b2b2b", highlightthickness=0)
-        self.image_canvas.grid(row=0, column=0, sticky="ne", pady=5)
-        try:
-            if getattr(sys, 'frozen', False):
-                base_path = sys._MEIPASS
-            else:
-                base_path = os.path.dirname(os.path.abspath(__file__))
-            image_path = os.path.join(base_path, "oracle.png")
-            original = Image.open(image_path).convert("RGBA")
-            self.original_image = self.resize_image_to_fit(original, canvas_size, canvas_size)
-            self.tk_image = ImageTk.PhotoImage(self.original_image)
-            self.canvas_image = self.image_canvas.create_image(canvas_size // 2, canvas_size // 2, image=self.tk_image)
-            logger.info(f"Loaded spinning image from {image_path}")
-        except Exception as e:
-            logger.error(f"Failed to load image: {e}")
-            self.image_canvas.create_text(canvas_size // 2, canvas_size // 2, text="Image Load Failed", fill="white")
-        self.animate_image()
+        right_frame.rowconfigure(3, weight=1)
 
         slider_frame = tk.Frame(right_frame, bg="#2b2b2b")
-        slider_frame.grid(row=1, column=0, sticky="ew", pady=5)
+        slider_frame.grid(row=0, column=0, sticky="ew", pady=5)
 
         timeout_frame = tk.Frame(slider_frame, bg="#2b2b2b")
         timeout_frame.pack(side=tk.LEFT, padx=5)
@@ -544,7 +559,7 @@ class InfiniteOracleGUI(tk.Tk):
         self.retries_slider.pack()
 
         start_mode_frame = tk.LabelFrame(right_frame, text="Start Mode Settings", bg="#2b2b2b", fg="white", padx=5, pady=5)
-        start_mode_frame.grid(row=2, column=0, sticky="ew", pady=5)
+        start_mode_frame.grid(row=1, column=0, sticky="ew", pady=5)
 
         interval_frame = tk.Frame(start_mode_frame, bg="#2b2b2b")
         interval_frame.pack(side=tk.LEFT, padx=5)
@@ -576,7 +591,7 @@ class InfiniteOracleGUI(tk.Tk):
         self.max_tokens_entry.config(state=tk.DISABLED if self.server_type_var.get() == "Ollama" else tk.NORMAL)
 
         button_frame = tk.Frame(right_frame, bg="#2b2b2b")
-        button_frame.grid(row=3, column=0, sticky="ew", pady=5)
+        button_frame.grid(row=2, column=0, sticky="ew", pady=5)
         self.start_button = tk.Button(button_frame, text="Start", command=self.start_oracle)
         self.start_button.pack(side=tk.LEFT, padx=5)
         self.stop_button = tk.Button(button_frame, text="Stop", command=self.stop_oracle, state=tk.DISABLED, bg="lightgray")
@@ -591,7 +606,7 @@ class InfiniteOracleGUI(tk.Tk):
         self.record_button.pack(side=tk.LEFT, padx=5)
 
         console_frame = tk.Frame(right_frame, bg="#2b2b2b")
-        console_frame.grid(row=4, column=0, sticky="nsew")
+        console_frame.grid(row=3, column=0, sticky="nsew")
         tk.Label(console_frame, text="Console Output:", bg="#2b2b2b", fg="white").pack()
         self.console_text = scrolledtext.ScrolledText(console_frame, height=30, width=60, state='disabled', bg="black", fg="green")
         self.console_text.pack(fill=tk.BOTH, expand=True)
