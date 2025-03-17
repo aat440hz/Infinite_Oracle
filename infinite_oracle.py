@@ -516,14 +516,14 @@ class InfiniteOracleGUI(tk.Tk):
         interval_frame = tk.Frame(start_mode_frame, bg="#2b2b2b")
         interval_frame.pack(side=tk.LEFT, padx=5)
         tk.Label(interval_frame, text="Speech Interval (seconds):", bg="#2b2b2b", fg="white").pack()
-        self.interval_slider = tk.Scale(interval_frame, from_=0.5, to=10, resolution=0.5, orient=tk.HORIZONTAL)
+        self.interval_slider = tk.Scale(interval_frame, from_=0.5, to=20, resolution=0.5, orient=tk.HORIZONTAL)
         self.interval_slider.set(self.config["Ollama"]["interval"])
         self.interval_slider.pack()
 
         variation_frame = tk.Frame(start_mode_frame, bg="#2b2b2b")
         variation_frame.pack(side=tk.LEFT, padx=5)
         tk.Label(variation_frame, text="Speech Interval Variation (seconds):", bg="#2b2b2b", fg="white").pack()
-        self.variation_slider = tk.Scale(variation_frame, from_=0, to=5, resolution=0.5, orient=tk.HORIZONTAL)
+        self.variation_slider = tk.Scale(variation_frame, from_=0, to=10, resolution=0.5, orient=tk.HORIZONTAL)
         self.variation_slider.set(self.config["Ollama"]["variation"])
         self.variation_slider.pack()
 
