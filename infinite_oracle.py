@@ -118,7 +118,6 @@ def generate_wisdom(gui, wisdom_queue, model, server_type, stop_event, get_reque
                 else data.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
             )
             if wisdom and not stop_event.is_set():
-                logger.info(f"Generated wisdom (length: {len(wisdom)} chars): {wisdom}")
                 print(f"The Infinite Oracle speaks: {wisdom}", end="\n\n")
                 with history_lock:
                     if gui.remember_var.get():
@@ -131,7 +130,8 @@ def generate_wisdom(gui, wisdom_queue, model, server_type, stop_event, get_reque
         finally:
             session.close()
         
-        interval = max(0.1, get_request_interval_func())
+        # Throttle based on wisdom length to prevent queue overload
+        interval = max(10.0, get_request_interval_func() + (len(wisdom) / 100))  # 10s base + 1s per 100 chars
         time.sleep(interval)
 
 def send_prompt(session, wisdom_queue, model, server_type, prompt, gui, timeout):
@@ -158,7 +158,6 @@ def send_prompt(session, wisdom_queue, model, server_type, prompt, gui, timeout)
             else data.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
         )
         if wisdom:
-            logger.info(f"Generated wisdom (length: {len(wisdom)} chars): {wisdom}")
             print(f"The Infinite Oracle speaks: {wisdom}", end="\n\n")
             with history_lock:
                 if gui.remember_var.get():
