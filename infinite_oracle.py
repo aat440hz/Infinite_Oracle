@@ -104,9 +104,7 @@ def generate_wisdom(gui, wisdom_queue, model, server_type, stop_event, get_reque
             "messages": messages,
             "stream": False
         }
-        if server_type == "Ollama":
-            payload["options"] = {"num_ctx": int(gui.num_ctx_entry.get())}
-        else:
+        if server_type != "Ollama":
             payload["max_tokens"] = int(gui.max_tokens_entry.get())
             payload["temperature"] = 0.7
         
@@ -146,9 +144,7 @@ def send_prompt(session, wisdom_queue, model, server_type, prompt, gui, timeout)
         "messages": messages,
         "stream": False
     }
-    if server_type == "Ollama":
-        payload["options"] = {"num_ctx": int(gui.num_ctx_entry.get())}
-    else:
+    if server_type != "Ollama":
         payload["max_tokens"] = int(gui.max_tokens_entry.get())
         payload["temperature"] = 0.7
     
@@ -294,8 +290,7 @@ def load_config():
             "variation": 0,
             "request_interval": 1.0,
             "timeout": 60,
-            "retries": 0,
-            "num_ctx": 2048  # Default Ollama context size
+            "retries": 0
         },
         "LM Studio": {
             "server_type": "LM Studio",
@@ -337,11 +332,9 @@ def save_config(gui):
         "variation": gui.variation_slider.get(),
         "request_interval": gui.request_interval_slider.get(),
         "timeout": gui.timeout_slider.get(),
-        "retries": gui.retries_slider.get(),
+        "retries": gui.retries_slider.get()
     }
-    if server_type == "Ollama":
-        config[server_type]["num_ctx"] = int(gui.num_ctx_entry.get())
-    else:
+    if server_type != "Ollama":
         config[server_type]["max_tokens"] = int(gui.max_tokens_entry.get())
     with open(CONFIG_FILE, 'w') as f:
         json.dump(config, f, indent=4)
@@ -426,16 +419,12 @@ class InfiniteOracleGUI(tk.Tk):
         self.request_interval_slider.set(config["request_interval"])
         self.timeout_slider.set(config["timeout"])
         self.retries_slider.set(config["retries"])
-        if server_type == "Ollama":
-            self.num_ctx_entry.delete(0, tk.END)
-            self.num_ctx_entry.insert(0, str(config["num_ctx"]))
-            self.max_tokens_entry.config(state=tk.DISABLED, bg="grey")
-            self.num_ctx_entry.config(state=tk.NORMAL, bg="white")
-        else:
+        if server_type != "Ollama":
             self.max_tokens_entry.delete(0, tk.END)
             self.max_tokens_entry.insert(0, str(config["max_tokens"]))
-            self.num_ctx_entry.config(state=tk.DISABLED, bg="grey")
             self.max_tokens_entry.config(state=tk.NORMAL, bg="white")
+        else:
+            self.max_tokens_entry.config(state=tk.DISABLED, bg="grey")
         self.url_modified = False
         logger.info(f"Loaded config for {server_type} from {CONFIG_FILE}")
 
@@ -558,14 +547,7 @@ class InfiniteOracleGUI(tk.Tk):
         self.max_tokens_entry = tk.Entry(max_tokens_frame, width=10)
         self.max_tokens_entry.insert(0, str(self.config["LM Studio"]["max_tokens"]))
         self.max_tokens_entry.pack()
-        self.max_tokens_entry.config(state=tk.DISABLED, bg="grey")
-
-        num_ctx_frame = tk.Frame(start_mode_frame, bg="#2b2b2b")
-        num_ctx_frame.pack(side=tk.LEFT, padx=5)
-        tk.Label(num_ctx_frame, text="Context Size (Ollama):", bg="#2b2b2b", fg="white").pack()
-        self.num_ctx_entry = tk.Entry(num_ctx_frame, width=10)
-        self.num_ctx_entry.insert(0, str(self.config["Ollama"]["num_ctx"]))
-        self.num_ctx_entry.pack()
+        self.max_tokens_entry.config(state=tk.DISABLED if self.server_type_var.get() == "Ollama" else tk.NORMAL)
 
         # Buttons
         button_frame = tk.Frame(right_frame, bg="#2b2b2b")
@@ -611,7 +593,6 @@ class InfiniteOracleGUI(tk.Tk):
         self.timeout_slider.config(state=tk.DISABLED)
         self.retries_slider.config(state=tk.DISABLED)
         self.max_tokens_entry.config(state=tk.DISABLED, bg="grey")
-        self.num_ctx_entry.config(state=tk.DISABLED, bg="grey")
         self.update()
 
     def enable_send_and_start(self):
@@ -636,12 +617,7 @@ class InfiniteOracleGUI(tk.Tk):
             self.timeout_slider.config(state=tk.NORMAL)
             self.retries_slider.config(state=tk.NORMAL)
             server_type = self.server_type_var.get()
-            if server_type == "Ollama":
-                self.num_ctx_entry.config(state=tk.NORMAL, bg="white")
-                self.max_tokens_entry.config(state=tk.DISABLED, bg="grey")
-            else:
-                self.max_tokens_entry.config(state=tk.NORMAL, bg="white")
-                self.num_ctx_entry.config(state=tk.DISABLED, bg="grey")
+            self.max_tokens_entry.config(state=tk.NORMAL if server_type != "Ollama" else tk.DISABLED, bg="white" if server_type != "Ollama" else "grey")
             self.send_enabled = True
         self.update()
 
@@ -769,12 +745,7 @@ class InfiniteOracleGUI(tk.Tk):
             self.timeout_slider.config(state=tk.NORMAL)
             self.retries_slider.config(state=tk.NORMAL)
             server_type = self.server_type_var.get()
-            if server_type == "Ollama":
-                self.num_ctx_entry.config(state=tk.NORMAL, bg="white")
-                self.max_tokens_entry.config(state=tk.DISABLED, bg="grey")
-            else:
-                self.max_tokens_entry.config(state=tk.NORMAL, bg="white")
-                self.num_ctx_entry.config(state=tk.DISABLED, bg="grey")
+            self.max_tokens_entry.config(state=tk.NORMAL if server_type != "Ollama" else tk.DISABLED, bg="white" if server_type != "Ollama" else "grey")
             logger.info("Oracle stopped.")
 
     def send_prompt_action(self):
