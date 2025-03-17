@@ -22,7 +22,7 @@ from PIL import Image, ImageTk
 
 # Server defaults
 DEFAULT_OLLAMA_URL = "http://localhost:11434/api/chat"
-DEFAULT_LM_STUDIO_URL = "http://localhost:1234/v1/chat/completions"
+DEFAULT_LM_STUDIO_URL = "http://localhost:1234/v1/chat/completions"  # Corrected from localhost1
 DEFAULT_OLLAMA_MODEL = "llama3.2:latest"
 DEFAULT_LM_STUDIO_MODEL = "qwen2.5-1.5b-instruct"
 DEFAULT_TTS_URL = "http://localhost:5002/api/tts"
@@ -108,7 +108,8 @@ def generate_wisdom(gui, wisdom_queue, model, server_type, stop_event, get_reque
             payload["max_tokens"] = int(gui.max_tokens_entry.get())
             payload["temperature"] = 0.7
         
-        session = setup_session(SERVER_URL, gui.retries_slider.get())
+        # No retries for Start mode
+        session = setup_session(SERVER_URL, retries=0)
         try:
             response = session.post(SERVER_URL, json=payload, timeout=gui.timeout_slider.get())
             response.raise_for_status()
@@ -125,13 +126,14 @@ def generate_wisdom(gui, wisdom_queue, model, server_type, stop_event, get_reque
                         conversation_history.append({"role": "assistant", "content": wisdom})
                 wisdom_queue.put(wisdom)
         except requests.RequestException as e:
-            logger.error(f"{server_type} connection error: {e}")
-            print(f"{server_type} error: {str(e)}. Retrying in {get_request_interval_func()}s...")
+            logger.error(f"{server_type} connection error: {e}", exc_info=False)
+            print(f"{server_type} error: {str(e)}. Next attempt in {get_request_interval_func()}s...")
         finally:
             session.close()
         
-        interval = max(10.0, get_request_interval_func() + (len(wisdom) / 100))
-        time.sleep(interval)
+        # Always wait the full interval
+        if not stop_event.is_set():
+            time.sleep(get_request_interval_func())
 
 def send_prompt(session, wisdom_queue, model, server_type, prompt, gui, timeout):
     global conversation_history
@@ -165,6 +167,7 @@ def send_prompt(session, wisdom_queue, model, server_type, prompt, gui, timeout)
             wisdom_queue.put(wisdom)
     except requests.RequestException as e:
         logger.error(f"{server_type} connection error in send_prompt: {e}")
+        print(f"{server_type} error: {str(e)}")
     finally:
         session.close()
         gui.after(0, lambda: gui.enable_send_and_start())
@@ -214,7 +217,6 @@ def text_to_speech(wisdom_queue, audio_queue, get_speaker_id_func, pitch_func, s
             wisdom_queue.task_done()
 
 def apply_reverb(audio, reverb_value):
-    """Custom reverb effect: overlay a delayed, attenuated copy of the audio."""
     if reverb_value <= 0:
         return audio
     reverb_factor = reverb_value / 5.0
@@ -238,20 +240,17 @@ def play_audio(audio_queue, stop_event, get_interval_func, get_variation_func, g
                 if not stop_event.is_set():
                     audio = AudioSegment.from_wav(wav_path)
                     
-                    # Apply pitch shift (affects both pitch and playrate)
                     if pitch != 0:
                         octaves = pitch / 12.0
                         new_sample_rate = int(audio.frame_rate * (2.0 ** octaves))
                         audio = audio._spawn(audio.raw_data, overrides={"frame_rate": new_sample_rate})
-                        audio = audio.set_frame_rate(22050)  # Reset to standard rate
+                        audio = audio.set_frame_rate(22050)
 
-                    # Apply reverb and normalize
                     reverb_value = gui.reverb_slider.get()
                     if reverb_value > 0:
                         audio = apply_reverb(audio, reverb_value)
                     audio = normalize(audio)
 
-                    # Save if recording
                     if gui.record_var.get():
                         recordings_dir = os.path.join(os.path.dirname(sys.executable if getattr(sys, 'frozen', False) else __file__), "OracleRecordings")
                         os.makedirs(recordings_dir, exist_ok=True)
@@ -305,7 +304,7 @@ def load_config():
             "request_interval": 1.0,
             "timeout": 60,
             "retries": 0,
-            "max_tokens": 300  # Default LM Studio max tokens
+            "max_tokens": 300
         }
     }
     if os.path.exists(CONFIG_FILE):
@@ -345,7 +344,7 @@ class InfiniteOracleGUI(tk.Tk):
         super().__init__()
         self.title("Infinite Oracle Control Panel")
         self.state("zoomed")
-        self.geometry("800x900")
+        self.geometry("1000x1000")
 
         print(f"Current working directory: {os.getcwd()}")
 
@@ -431,13 +430,11 @@ class InfiniteOracleGUI(tk.Tk):
     def create_widgets(self):
         self.configure(bg="#2b2b2b")
 
-        # Grid layout: 2 columns
         self.columnconfigure(0, weight=1)
         self.columnconfigure(1, weight=1)
-        self.rowconfigure(0, weight=0)  # Inputs/Sliders
-        self.rowconfigure(1, weight=1)  # Console
+        self.rowconfigure(0, weight=0)
+        self.rowconfigure(1, weight=1)
 
-        # Left Column: Inputs, Prompt, Effects
         left_frame = tk.Frame(self, bg="#2b2b2b")
         left_frame.grid(row=0, column=0, sticky="nsew", padx=10, pady=10)
 
@@ -471,7 +468,6 @@ class InfiniteOracleGUI(tk.Tk):
         self.send_button = tk.Button(prompt_frame, text="Send", command=self.send_prompt_action)
         self.send_button.pack(side=tk.RIGHT, padx=5)
 
-        # Effects Section
         effects_frame = tk.LabelFrame(left_frame, text="Effects", bg="#2b2b2b", fg="white", padx=5, pady=5)
         effects_frame.pack(pady=5, fill=tk.X)
 
@@ -489,16 +485,14 @@ class InfiniteOracleGUI(tk.Tk):
         self.reverb_slider.set(self.config["Ollama"]["reverb"])
         self.reverb_slider.pack()
 
-        # Right Column: Sliders, Buttons, Console
         right_frame = tk.Frame(self, bg="#2b2b2b")
         right_frame.grid(row=0, column=1, rowspan=2, sticky="nsew", padx=10, pady=10)
         right_frame.columnconfigure(0, weight=1)
-        right_frame.rowconfigure(0, weight=0)  # Sliders
-        right_frame.rowconfigure(1, weight=0)  # Start Mode Settings
-        right_frame.rowconfigure(2, weight=0)  # Buttons
-        right_frame.rowconfigure(3, weight=1)  # Console
+        right_frame.rowconfigure(0, weight=0)
+        right_frame.rowconfigure(1, weight=0)
+        right_frame.rowconfigure(2, weight=0)
+        right_frame.rowconfigure(3, weight=1)
 
-        # Sliders (Timeout, Retries)
         slider_frame = tk.Frame(right_frame, bg="#2b2b2b")
         slider_frame.grid(row=0, column=0, sticky="ew", pady=5)
 
@@ -516,7 +510,6 @@ class InfiniteOracleGUI(tk.Tk):
         self.retries_slider.set(self.config["Ollama"]["retries"])
         self.retries_slider.pack()
 
-        # Start Mode Settings
         start_mode_frame = tk.LabelFrame(right_frame, text="Start Mode Settings", bg="#2b2b2b", fg="white", padx=5, pady=5)
         start_mode_frame.grid(row=1, column=0, sticky="ew", pady=5)
 
@@ -549,7 +542,6 @@ class InfiniteOracleGUI(tk.Tk):
         self.max_tokens_entry.pack()
         self.max_tokens_entry.config(state=tk.DISABLED if self.server_type_var.get() == "Ollama" else tk.NORMAL)
 
-        # Buttons
         button_frame = tk.Frame(right_frame, bg="#2b2b2b")
         button_frame.grid(row=2, column=0, sticky="ew", pady=5)
         self.start_button = tk.Button(button_frame, text="Start", command=self.start_oracle)
@@ -565,7 +557,6 @@ class InfiniteOracleGUI(tk.Tk):
         self.record_button = tk.Button(button_frame, text="Record", command=self.toggle_record, bg="red", fg="white")
         self.record_button.pack(side=tk.LEFT, padx=5)
 
-        # Console
         console_frame = tk.Frame(right_frame, bg="#2b2b2b")
         console_frame.grid(row=3, column=0, sticky="nsew")
         tk.Label(console_frame, text="Console Output:", bg="#2b2b2b", fg="white").pack()
@@ -652,7 +643,9 @@ class InfiniteOracleGUI(tk.Tk):
 
         self.stop_oracle()
 
-        if not self.verify_server(SERVER_URL, server_type, model):
+        success, error_msg = ping_server(SERVER_URL, server_type, model, self.timeout_slider.get(), self.retries_slider.get())
+        if not success:
+            print(error_msg)
             self.start_lock = False
             self.after(0, self.enable_send_and_start)
             return
