@@ -96,7 +96,7 @@ def generate_wisdom(gui, wisdom_queue, model, server_type, stop_event, get_reque
     global conversation_history
     while not stop_event.is_set():
         with history_lock:
-            if not gui.remember_var.get():  # If "Remember" is unchecked, clear history each time
+            if not gui.remember_var.get():
                 conversation_history = []
             messages = [{"role": "system", "content": SYSTEM_PROMPT}] + conversation_history + [{"role": "user", "content": "Provide your wisdom."}]
         payload = {
@@ -121,7 +121,7 @@ def generate_wisdom(gui, wisdom_queue, model, server_type, stop_event, get_reque
                 logger.info(f"Generated wisdom (length: {len(wisdom)} chars): {wisdom}")
                 print(f"The Infinite Oracle speaks: {wisdom}", end="\n\n")
                 with history_lock:
-                    if gui.remember_var.get():  # Only append if "Remember" is checked
+                    if gui.remember_var.get():
                         conversation_history.append({"role": "user", "content": "Provide your wisdom."})
                         conversation_history.append({"role": "assistant", "content": wisdom})
                 wisdom_queue.put(wisdom)
@@ -137,7 +137,7 @@ def generate_wisdom(gui, wisdom_queue, model, server_type, stop_event, get_reque
 def send_prompt(session, wisdom_queue, model, server_type, prompt, gui, timeout):
     global conversation_history
     with history_lock:
-        if not gui.remember_var.get():  # If "Remember" is unchecked, clear history
+        if not gui.remember_var.get():
             conversation_history = []
         messages = [{"role": "system", "content": SYSTEM_PROMPT}] + conversation_history + [{"role": "user", "content": prompt}]
     payload = {
@@ -161,7 +161,7 @@ def send_prompt(session, wisdom_queue, model, server_type, prompt, gui, timeout)
             logger.info(f"Generated wisdom (length: {len(wisdom)} chars): {wisdom}")
             print(f"The Infinite Oracle speaks: {wisdom}", end="\n\n")
             with history_lock:
-                if gui.remember_var.get():  # Only append if "Remember" is checked
+                if gui.remember_var.get():
                     conversation_history.append({"role": "user", "content": prompt})
                     conversation_history.append({"role": "assistant", "content": wisdom})
             wisdom_queue.put(wisdom)
@@ -239,15 +239,31 @@ def play_audio(audio_queue, stop_event, get_interval_func, get_variation_func, g
             with playback_lock:
                 if not stop_event.is_set():
                     audio = AudioSegment.from_wav(wav_path)
+                    
+                    # Apply pitch shift (affects both pitch and playrate)
                     if pitch != 0:
                         octaves = pitch / 12.0
                         new_sample_rate = int(audio.frame_rate * (2.0 ** octaves))
                         audio = audio._spawn(audio.raw_data, overrides={"frame_rate": new_sample_rate})
-                        audio = audio.set_frame_rate(22050)
+                        audio = audio.set_frame_rate(22050)  # Reset to standard rate
+
+                    # Apply reverb and normalize
                     reverb_value = gui.reverb_slider.get()
                     if reverb_value > 0:
                         audio = apply_reverb(audio, reverb_value)
                     audio = normalize(audio)
+
+                    # Save if recording
+                    if gui.record_var.get():
+                        recordings_dir = os.path.join(os.path.dirname(sys.executable if getattr(sys, 'frozen', False) else __file__), "OracleRecordings")
+                        os.makedirs(recordings_dir, exist_ok=True)
+                        timestamp = time.strftime("%Y%m%d_%H%M%S")
+                        filename = f"oracle_{timestamp}.wav"
+                        filepath = os.path.join(recordings_dir, filename)
+                        audio.export(filepath, format="wav")
+                        logger.info(f"Saved audio clip: {filepath}")
+                        print(f"Recorded wisdom to: {filepath}")
+
                     logger.info(f"Playing audio for: {wisdom[:50]}... (Pitch: {pitch}, Reverb: {reverb_value})")
                     play(audio)
             os.remove(wav_path)
@@ -367,7 +383,8 @@ class InfiniteOracleGUI(tk.Tk):
         self.send_playback_thread = None
         self.send_enabled = True
         self.url_modified = False
-        self.remember_var = tk.BooleanVar(value=True)  # New: Remember checkbox, defaults to True
+        self.remember_var = tk.BooleanVar(value=True)
+        self.record_var = tk.BooleanVar(value=False)
 
         self.create_widgets()
         sys.stdout = ConsoleRedirector(self.console_text)
@@ -530,6 +547,8 @@ class InfiniteOracleGUI(tk.Tk):
         self.clear_button.pack(side=tk.LEFT, padx=5)
         self.remember_check = tk.Checkbutton(button_frame, text="Remember", variable=self.remember_var, command=self.toggle_remember, bg="#2b2b2b", fg="white", selectcolor="black")
         self.remember_check.pack(side=tk.LEFT, padx=5)
+        self.record_button = tk.Button(button_frame, text="Record", command=self.toggle_record, bg="red", fg="white")
+        self.record_button.pack(side=tk.LEFT, padx=5)
 
         # Console
         console_frame = tk.Frame(right_frame, bg="#2b2b2b")
@@ -543,7 +562,8 @@ class InfiniteOracleGUI(tk.Tk):
         self.send_button.config(state=tk.DISABLED)
         self.save_button.config(state=tk.DISABLED)
         self.clear_button.config(state=tk.DISABLED)
-        self.remember_check.config(state=tk.DISABLED)  # Disable checkbox during operations
+        self.remember_check.config(state=tk.DISABLED)
+        self.record_button.config(state=tk.DISABLED)
         self.server_type_menu.config(state=tk.DISABLED)
         self.server_url_entry.config(state=tk.DISABLED)
         self.model_entry.config(state=tk.DISABLED)
@@ -564,8 +584,9 @@ class InfiniteOracleGUI(tk.Tk):
             self.send_button.config(state=tk.NORMAL)
             self.start_button.config(state=tk.NORMAL)
             self.save_button.config(state=tk.NORMAL)
-            self.clear_button.config(state=tk.NORMAL if self.remember_var.get() else tk.DISABLED)  # Enable only if Remember is checked
+            self.clear_button.config(state=tk.NORMAL if self.remember_var.get() else tk.DISABLED)
             self.remember_check.config(state=tk.NORMAL)
+            self.record_button.config(state=tk.NORMAL)
             self.server_type_menu.config(state=tk.NORMAL)
             self.server_url_entry.config(state=tk.NORMAL)
             self.model_entry.config(state=tk.NORMAL)
@@ -683,8 +704,9 @@ class InfiniteOracleGUI(tk.Tk):
             self.start_button.config(state=tk.NORMAL)
             self.send_button.config(state=tk.NORMAL)
             self.save_button.config(state=tk.NORMAL)
-            self.clear_button.config(state=tk.NORMAL if self.remember_var.get() else tk.DISABLED)  # Enable only if Remember is checked
+            self.clear_button.config(state=tk.NORMAL if self.remember_var.get() else tk.DISABLED)
             self.remember_check.config(state=tk.NORMAL)
+            self.record_button.config(state=tk.NORMAL)
             self.server_type_menu.config(state=tk.NORMAL)
             self.server_url_entry.config(state=tk.NORMAL)
             self.model_entry.config(state=tk.NORMAL)
@@ -746,17 +768,30 @@ class InfiniteOracleGUI(tk.Tk):
 
     def toggle_remember(self):
         """Handle the Remember checkbox toggle."""
-        if not self.remember_var.get():  # If unchecked, clear history and disable Clear History button
+        if not self.remember_var.get():
             with history_lock:
                 global conversation_history
                 conversation_history = []
             self.clear_button.config(state=tk.DISABLED)
             logger.info("History disabled and cleared.")
             print("The Infinite Oracle will forget all past wisdom.")
-        else:  # If checked, re-enable Clear History button
+        else:
             self.clear_button.config(state=tk.NORMAL)
             logger.info("History enabled.")
             print("The Infinite Oracle will now remember its wisdom.")
+
+    def toggle_record(self):
+        """Toggle recording state and update button appearance."""
+        if self.record_var.get():
+            self.record_var.set(False)
+            self.record_button.config(bg="red", relief=tk.RAISED)
+            logger.info("Recording stopped.")
+            print("The Infinite Oracle’s voice will no longer be captured.")
+        else:
+            self.record_var.set(True)
+            self.record_button.config(bg="#ff4040", relief=tk.SUNKEN)
+            logger.info("Recording started.")
+            print("The Infinite Oracle’s wisdom will now be preserved.")
 
 def main():
     app = InfiniteOracleGUI()
