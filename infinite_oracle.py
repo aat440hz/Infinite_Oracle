@@ -106,7 +106,7 @@ def generate_wisdom(gui, wisdom_queue, model, server_type, stop_event, get_reque
             payload["max_tokens"] = int(gui.max_tokens_entry.get())
             payload["temperature"] = 0.7
         
-        session = setup_session(SERVER_URL, retries=gui.retries_slider.get())  # Use slider value
+        session = setup_session(SERVER_URL, retries=gui.retries_slider.get())
         try:
             response = session.post(SERVER_URL, json=payload, timeout=gui.timeout_slider.get())
             response.raise_for_status()
@@ -337,24 +337,21 @@ def save_config(gui):
 class LoadingScreen(tk.Toplevel):
     def __init__(self, parent):
         super().__init__(parent)
-        self.overrideredirect(True)  # Remove window borders
+        self.overrideredirect(True)
         self.geometry("300x300")
         self.update_idletasks()
-        # Center on screen
         screen_width = self.winfo_screenwidth()
         screen_height = self.winfo_screenheight()
         x = (screen_width - 300) // 2
         y = (screen_height - 300) // 2
         self.geometry(f"+{x}+{y}")
 
-        # Load path for oracle.png only
         if getattr(sys, 'frozen', False):
             base_path = sys._MEIPASS
         else:
             base_path = os.path.dirname(os.path.abspath(__file__))
         oracle_path = os.path.join(base_path, "oracle.png")
 
-        # Load and resize oracle PNG (static, no rotation)
         try:
             original = Image.open(oracle_path).convert("RGBA")
             resized = original.resize((150, 150), Image.Resampling.LANCZOS)
@@ -367,10 +364,9 @@ class LoadingScreen(tk.Toplevel):
 
         self.canvas = tk.Canvas(self, width=300, height=300, bg="black", highlightthickness=0)
         self.canvas.pack(fill="both", expand=True)
-        self.canvas.configure(bg="black")  # Set to black for transparency key
-        self.attributes("-transparentcolor", "black")  # Windows-specific transparency
+        self.canvas.configure(bg="black")
+        self.attributes("-transparentcolor", "black")
 
-        # Create static oracle image
         self.oracle_item = self.canvas.create_image(150, 150, image=self.oracle_image)
 
 class InfiniteOracleGUI(tk.Tk):
@@ -379,11 +375,10 @@ class InfiniteOracleGUI(tk.Tk):
         self.title("Infinite Oracle Control Panel")
         self.state("zoomed")
         self.geometry("1440x1080")
-        self.withdraw()  # Hide main window during initialization
+        self.withdraw()
 
-        # Show loading screen immediately
         self.loading_screen = LoadingScreen(self)
-        self.update()  # Ensure loading screen renders
+        self.update()
 
         print(f"Current working directory: {os.getcwd()}")
 
@@ -428,8 +423,9 @@ class InfiniteOracleGUI(tk.Tk):
         self.oracle_frame_index = 0
         self.glow_frame_index = 0
         self.image_spin_speed = 5
+        self.animation_running = True
+        self.animate_lock = threading.Lock()
 
-        # Load pre-rendered frames (this is what takes time)
         try:
             if getattr(sys, 'frozen', False):
                 base_path = sys._MEIPASS
@@ -438,7 +434,7 @@ class InfiniteOracleGUI(tk.Tk):
             self.image_path = os.path.join(base_path, "oracle.png")
             self.glow_path = os.path.join(base_path, "glow.gif")
             
-            self.oracle_frames = self.load_pre_rotated_frames(self.image_path, 36)  # 10-degree steps
+            self.oracle_frames = self.load_pre_rotated_frames(self.image_path, 36)
             self.glow_base_frames = self.load_gif_frames(self.glow_path)
             self.glow_frames = [self.load_pre_rotated_frames_from_base(frame, 36) for frame in self.glow_base_frames]
         except Exception as e:
@@ -446,9 +442,8 @@ class InfiniteOracleGUI(tk.Tk):
             self.oracle_frames = [ImageTk.PhotoImage(Image.new("RGBA", (200, 200), (255, 255, 255, 0)))]
             self.glow_frames = [[ImageTk.PhotoImage(Image.new("RGBA", (240, 240), (255, 255, 255, 0)))]]
 
-        # Destroy loading screen and show main window
         self.loading_screen.destroy()
-        self.deiconify()  # Show main window
+        self.deiconify()
 
         self.create_widgets()
         sys.stdout = ConsoleRedirector(self.console_text)
@@ -467,13 +462,12 @@ class InfiniteOracleGUI(tk.Tk):
         self.send_tts_thread.start()
         self.send_playback_thread.start()
 
-        self.animate_gif()
-        self.animate_images()
+        self.animation_thread = threading.Thread(target=self.run_animations, daemon=True)
+        self.animation_thread.start()
 
     def load_pre_rotated_frames(self, image_path, num_frames):
-        """Pre-render rotated versions of a single image."""
         original = Image.open(image_path).convert("RGBA")
-        canvas_size = 200  # Match your canvas size
+        canvas_size = 200
         resized = self.resize_image_to_fit(original, canvas_size, canvas_size)
         frames = []
         for angle in range(0, 360, 360 // num_frames):
@@ -482,9 +476,8 @@ class InfiniteOracleGUI(tk.Tk):
         return frames
 
     def load_gif_frames(self, gif_path):
-        """Load base frames from a GIF."""
         gif = Image.open(gif_path)
-        glow_max_size = int(200 * 1.2)  # Match your glow scaling
+        glow_max_size = int(200 * 1.2)
         frames = []
         for frame in ImageSequence.Iterator(gif):
             resized = self.resize_image_to_fit(frame.convert("RGBA"), glow_max_size, glow_max_size)
@@ -492,12 +485,26 @@ class InfiniteOracleGUI(tk.Tk):
         return frames
 
     def load_pre_rotated_frames_from_base(self, base_image, num_frames):
-        """Pre-render rotated versions of a GIF frame."""
         frames = []
         for angle in range(0, 360, 360 // num_frames):
             rotated = base_image.rotate(angle, resample=Image.Resampling.BICUBIC)
             frames.append(ImageTk.PhotoImage(rotated))
         return frames
+
+    def run_animations(self):
+        while self.animation_running:
+            with self.animate_lock:
+                if self.glow_frames:
+                    self.glow_frame_index = (self.glow_frame_index + 1) % len(self.glow_frames)
+                    glow_rotation_index = (len(self.glow_frames[self.glow_frame_index]) - 1 - (self.oracle_frame_index % len(self.glow_frames[self.glow_frame_index])))
+                    self.image_canvas.itemconfig(self.glow_item, image=self.glow_frames[self.glow_frame_index][glow_rotation_index])
+
+                if self.is_audio_playing:
+                    self.oracle_frame_index = (self.oracle_frame_index + 1) % len(self.oracle_frames)
+                    self.image_canvas.itemconfig(self.oracle_item, image=self.oracle_frames[self.oracle_frame_index])
+                    glow_rotation_index = (len(self.glow_frames[self.glow_frame_index]) - 1 - (self.oracle_frame_index % len(self.glow_frames[self.glow_frame_index])))
+                    self.image_canvas.itemconfig(self.glow_item, image=self.glow_frames[self.glow_frame_index][glow_rotation_index])
+            time.sleep(0.1 if not self.is_audio_playing else 0.05)
 
     def update_from_config(self):
         self.config = load_config()
@@ -682,23 +689,6 @@ class InfiniteOracleGUI(tk.Tk):
         self.console_text = scrolledtext.ScrolledText(console_frame, height=30, width=60, state='disabled', bg="black", fg="green")
         self.console_text.pack(fill=tk.BOTH, expand=True)
 
-    def animate_gif(self):
-        if self.glow_frames:
-            self.glow_frame_index = (self.glow_frame_index + 1) % len(self.glow_frames)
-            glow_rotation_index = (len(self.glow_frames[self.glow_frame_index]) - 1 - (self.oracle_frame_index % len(self.glow_frames[self.glow_frame_index])))
-            self.image_canvas.itemconfig(self.glow_item, image=self.glow_frames[self.glow_frame_index][glow_rotation_index])
-        self.after(100, self.animate_gif)
-
-    def animate_images(self):
-        if self.is_audio_playing:
-            self.oracle_frame_index = (self.oracle_frame_index + 1) % len(self.oracle_frames)
-            self.image_canvas.itemconfig(self.oracle_item, image=self.oracle_frames[self.oracle_frame_index])
-            glow_rotation_index = (len(self.glow_frames[self.glow_frame_index]) - 1 - (self.oracle_frame_index % len(self.glow_frames[self.glow_frame_index])))
-            self.image_canvas.itemconfig(self.glow_item, image=self.glow_frames[self.glow_frame_index][glow_rotation_index])
-            self.after(50, self.animate_images)
-        else:
-            self.after(200, self.animate_images)  # Slower when idle
-
     def disable_controls(self):
         self.start_button.config(state=tk.DISABLED)
         self.send_button.config(state=tk.DISABLED)
@@ -720,7 +710,6 @@ class InfiniteOracleGUI(tk.Tk):
         self.timeout_slider.config(state=tk.DISABLED)
         self.retries_slider.config(state=tk.DISABLED)
         self.max_tokens_entry.config(state=tk.DISABLED, bg="grey")
-        self.update()
 
     def enable_send_and_start(self):
         if not self.is_running and not self.start_lock:
@@ -746,7 +735,6 @@ class InfiniteOracleGUI(tk.Tk):
             server_type = self.server_type_var.get()
             self.max_tokens_entry.config(state=tk.NORMAL if server_type != "Ollama" else tk.DISABLED, bg="white" if server_type != "Ollama" else "grey")
             self.send_enabled = True
-        self.update()
 
     def save_config_action(self):
         if not self.start_lock and self.send_enabled:
@@ -758,156 +746,165 @@ class InfiniteOracleGUI(tk.Tk):
         return ping_server(server_url, server_type, model, self.timeout_slider.get(), self.retries_slider.get())
 
     def start_oracle(self):
-        if self.start_lock or self.is_running:
-            return
-        self.start_lock = True
-        self.disable_controls()
+        def start_thread():
+            if self.start_lock or self.is_running:
+                return
+            self.start_lock = True
+            self.disable_controls()
 
-        global SERVER_URL, SYSTEM_PROMPT, TTS_SERVER_URL
-        SERVER_URL = self.server_url_var.get()
-        server_type = self.server_type_var.get()
-        model = self.model_var.get()
-        SYSTEM_PROMPT = self.system_prompt_entry.get("1.0", tk.END).strip()
-        TTS_SERVER_URL = self.tts_url_var.get()
-        speaker_id = self.speaker_id_var.get()
+            global SERVER_URL, SYSTEM_PROMPT, TTS_SERVER_URL
+            SERVER_URL = self.server_url_var.get()
+            server_type = self.server_type_var.get()
+            model = self.model_var.get()
+            SYSTEM_PROMPT = self.system_prompt_entry.get("1.0", tk.END).strip()
+            TTS_SERVER_URL = self.tts_url_var.get()
+            speaker_id = self.speaker_id_var.get()
 
-        if not all([SERVER_URL, server_type, model, TTS_SERVER_URL, speaker_id]):
-            messagebox.showerror("Input Error", "Please fill all fields.")
-            self.start_lock = False
-            self.after(0, self.enable_send_and_start)
-            return
+            if not all([SERVER_URL, server_type, model, TTS_SERVER_URL, speaker_id]):
+                messagebox.showerror("Input Error", "Please fill all fields.")
+                self.start_lock = False
+                self.after(0, self.enable_send_and_start)
+                return
 
-        self.stop_oracle()
+            self.stop_oracle()
 
-        success, error_msg = ping_server(SERVER_URL, server_type, model, self.timeout_slider.get(), self.retries_slider.get())
-        if not success:
-            print(error_msg)
-            self.start_lock = False
-            self.after(0, self.enable_send_and_start)
-            return
+            success, error_msg = ping_server(SERVER_URL, server_type, model, self.timeout_slider.get(), self.retries_slider.get())
+            if not success:
+                print(error_msg)
+                self.start_lock = False
+                self.after(0, self.enable_send_and_start)
+                return
 
-        self.is_running = True
-        self.stop_event.clear()
-        self.stop_button.config(state=tk.NORMAL, bg="red")
+            self.is_running = True
+            self.stop_event.clear()
+            self.stop_button.config(state=tk.NORMAL, bg="red")
 
-        self.generator_thread = threading.Thread(
-            target=generate_wisdom,
-            args=(self, self.wisdom_queue, model, server_type, self.stop_event, self.request_interval_slider.get),
-            daemon=True
-        )
-        self.tts_thread = threading.Thread(
-            target=text_to_speech,
-            args=(self.wisdom_queue, self.audio_queue, lambda: self.speaker_id_var.get(), self.pitch_slider.get, self.stop_event),
-            daemon=True
-        )
-        self.playback_thread = threading.Thread(
-            target=play_audio,
-            args=(self.audio_queue, self.stop_event, self.interval_slider.get, self.variation_slider.get, self, True),
-            daemon=True
-        )
+            self.generator_thread = threading.Thread(
+                target=generate_wisdom,
+                args=(self, self.wisdom_queue, model, server_type, self.stop_event, self.request_interval_slider.get),
+                daemon=True
+            )
+            self.tts_thread = threading.Thread(
+                target=text_to_speech,
+                args=(self.wisdom_queue, self.audio_queue, lambda: self.speaker_id_var.get(), self.pitch_slider.get, self.stop_event),
+                daemon=True
+            )
+            self.playback_thread = threading.Thread(
+                target=play_audio,
+                args=(self.audio_queue, self.stop_event, self.interval_slider.get, self.variation_slider.get, self, True),
+                daemon=True
+            )
 
-        self.generator_thread.start()
-        self.tts_thread.start()
-        self.playback_thread.start()
+            self.generator_thread.start()
+            self.tts_thread.start()
+            self.playback_thread.start()
 
-        self.after(500, lambda: setattr(self, 'start_lock', False))
+            self.after(500, lambda: setattr(self, 'start_lock', False))
+
+        threading.Thread(target=start_thread, daemon=True).start()
 
     def stop_oracle(self):
-        global conversation_history
-        if self.is_running:
-            self.is_running = False
-            self.stop_event.set()
-            if self.generator_thread:
-                self.generator_thread.join(timeout=1)
-                self.generator_thread = None
-            if self.tts_thread:
-                self.tts_thread.join(timeout=1)
-                self.tts_thread = None
-            if self.playback_thread:
-                self.playback_thread.join(timeout=1)
-                self.playback_thread = None
+        def stop_thread():
+            global conversation_history
+            if self.is_running:
+                self.is_running = False
+                self.stop_event.set()
+                if self.generator_thread:
+                    self.generator_thread.join(timeout=1)
+                    self.generator_thread = None
+                if self.tts_thread:
+                    self.tts_thread.join(timeout=1)
+                    self.tts_thread = None
+                if self.playback_thread:
+                    self.playback_thread.join(timeout=1)
+                    self.playback_thread = None
 
-            while not self.wisdom_queue.empty():
-                self.wisdom_queue.get_nowait()
-            while not self.audio_queue.empty():
-                try:
-                    _, wav_path, _ = self.audio_queue.get_nowait()
-                    if os.path.exists(wav_path):
-                        os.remove(wav_path)
-                except Exception as e:
-                    logger.error(f"Audio queue cleanup error: {e}")
-            while not self.send_wisdom_queue.empty():
-                self.send_wisdom_queue.get_nowait()
-            while not self.send_audio_queue.empty():
-                try:
-                    _, wav_path, _ = self.send_audio_queue.get_nowait()
-                    if os.path.exists(wav_path):
-                        os.remove(wav_path)
-                except Exception as e:
-                    logger.error(f"Send audio queue cleanup error: {e}")
+                while not self.wisdom_queue.empty():
+                    self.wisdom_queue.get_nowait()
+                while not self.audio_queue.empty():
+                    try:
+                        _, wav_path, _ = self.audio_queue.get_nowait()
+                        if os.path.exists(wav_path):
+                            os.remove(wav_path)
+                    except Exception as e:
+                        logger.error(f"Audio queue cleanup error: {e}")
+                while not self.send_wisdom_queue.empty():
+                    self.send_wisdom_queue.get_nowait()
+                while not self.send_audio_queue.empty():
+                    try:
+                        _, wav_path, _ = self.send_audio_queue.get_nowait()
+                        if os.path.exists(wav_path):
+                            os.remove(wav_path)
+                    except Exception as e:
+                        logger.error(f"Send audio queue cleanup error: {e}")
 
-            if self.session:
-                self.session.close()
-                self.session = None
+                if self.session:
+                    self.session.close()
+                    self.session = None
 
-            with history_lock:
-                conversation_history = []
+                with history_lock:
+                    conversation_history = []
 
-            self.start_button.config(state=tk.NORMAL)
-            self.send_button.config(state=tk.NORMAL)
-            self.save_button.config(state=tk.NORMAL)
-            self.clear_button.config(state=tk.NORMAL if self.remember_var.get() else tk.DISABLED)
-            self.remember_check.config(state=tk.NORMAL)
-            self.record_button.config(state=tk.NORMAL)
-            self.server_type_menu.config(state=tk.NORMAL)
-            self.server_url_entry.config(state=tk.NORMAL)
-            self.model_entry.config(state=tk.NORMAL)
-            self.tts_url_entry.config(state=tk.NORMAL)
-            self.speaker_id_entry.config(state=tk.NORMAL)
-            self.system_prompt_entry.config(state=tk.NORMAL)
-            self.stop_button.config(state=tk.DISABLED, bg="lightgray")
-            self.pitch_slider.config(state=tk.NORMAL)
-            self.reverb_slider.config(state=tk.NORMAL)
-            self.interval_slider.config(state=tk.NORMAL)
-            self.variation_slider.config(state=tk.NORMAL)
-            self.request_interval_slider.config(state=tk.NORMAL)
-            self.timeout_slider.config(state=tk.NORMAL)
-            self.retries_slider.config(state=tk.NORMAL)
-            server_type = self.server_type_var.get()
-            self.max_tokens_entry.config(state=tk.NORMAL if server_type != "Ollama" else tk.DISABLED, bg="white" if server_type != "Ollama" else "grey")
+                self.start_button.config(state=tk.NORMAL)
+                self.send_button.config(state=tk.NORMAL)
+                self.save_button.config(state=tk.NORMAL)
+                self.clear_button.config(state=tk.NORMAL if self.remember_var.get() else tk.DISABLED)
+                self.remember_check.config(state=tk.NORMAL)
+                self.record_button.config(state=tk.NORMAL)
+                self.server_type_menu.config(state=tk.NORMAL)
+                self.server_url_entry.config(state=tk.NORMAL)
+                self.model_entry.config(state=tk.NORMAL)
+                self.tts_url_entry.config(state=tk.NORMAL)
+                self.speaker_id_entry.config(state=tk.NORMAL)
+                self.system_prompt_entry.config(state=tk.NORMAL)
+                self.stop_button.config(state=tk.DISABLED, bg="lightgray")
+                self.pitch_slider.config(state=tk.NORMAL)
+                self.reverb_slider.config(state=tk.NORMAL)
+                self.interval_slider.config(state=tk.NORMAL)
+                self.variation_slider.config(state=tk.NORMAL)
+                self.request_interval_slider.config(state=tk.NORMAL)
+                self.timeout_slider.config(state=tk.NORMAL)
+                self.retries_slider.config(state=tk.NORMAL)
+                server_type = self.server_type_var.get()
+                self.max_tokens_entry.config(state=tk.NORMAL if server_type != "Ollama" else tk.DISABLED, bg="white" if server_type != "Ollama" else "grey")
+
+        threading.Thread(target=stop_thread, daemon=True).start()
 
     def send_prompt_action(self):
-        if not self.send_enabled or self.start_lock:
-            return
-        self.send_enabled = False
-        self.disable_controls()
+        def send_thread():
+            if not self.send_enabled or self.start_lock:
+                return
+            self.send_enabled = False
+            self.disable_controls()
 
-        global SERVER_URL, TTS_SERVER_URL
-        SERVER_URL = self.server_url_var.get()
-        server_type = self.server_type_var.get()
-        model = self.model_var.get()
-        prompt = self.system_prompt_entry.get("1.0", tk.END).strip()
-        TTS_SERVER_URL = self.tts_url_var.get()
-        speaker_id = self.speaker_id_var.get()
+            global SERVER_URL, TTS_SERVER_URL
+            SERVER_URL = self.server_url_var.get()
+            server_type = self.server_type_var.get()
+            model = self.model_var.get()
+            prompt = self.system_prompt_entry.get("1.0", tk.END).strip()
+            TTS_SERVER_URL = self.tts_url_var.get()
+            speaker_id = self.speaker_id_var.get()
 
-        if not all([SERVER_URL, server_type, model, prompt, TTS_SERVER_URL, speaker_id]):
-            messagebox.showwarning("Input Error", "Please fill all fields.")
-            self.send_enabled = True
-            self.enable_send_and_start()
-            return
+            if not all([SERVER_URL, server_type, model, prompt, TTS_SERVER_URL, speaker_id]):
+                messagebox.showwarning("Input Error", "Please fill all fields.")
+                self.send_enabled = True
+                self.enable_send_and_start()
+                return
 
-        send_session = setup_session(SERVER_URL, self.retries_slider.get())
-        if not self.verify_server(SERVER_URL, server_type, model):
-            send_session.close()
-            self.send_enabled = True
-            self.after(0, self.enable_send_and_start)
-            return
+            send_session = setup_session(SERVER_URL, self.retries_slider.get())
+            if not self.verify_server(SERVER_URL, server_type, model):
+                send_session.close()
+                self.send_enabled = True
+                self.after(0, self.enable_send_and_start)
+                return
 
-        threading.Thread(
-            target=send_prompt,
-            args=(send_session, self.send_wisdom_queue, model, server_type, prompt, self, self.timeout_slider.get()),
-            daemon=True
-        ).start()
+            threading.Thread(
+                target=send_prompt,
+                args=(send_session, self.send_wisdom_queue, model, server_type, prompt, self, self.timeout_slider.get()),
+                daemon=True
+            ).start()
+
+        threading.Thread(target=send_thread, daemon=True).start()
 
     def clear_history(self):
         if self.start_lock or not self.send_enabled:
