@@ -378,7 +378,7 @@ class InfiniteOracleGUI(tk.Tk):
         super().__init__()
         self.title("Infinite Oracle Control Panel")
         self.state("zoomed")
-        self.geometry("1000x1000")
+        self.geometry("1440x1080")
         self.withdraw()  # Hide main window during initialization
 
         # Show loading screen immediately
