@@ -177,13 +177,6 @@ def text_to_speech(wisdom_queue, audio_queue, get_speaker_id_func, pitch_func, s
             temp_wav_file.close()
 
             speaker_id = get_speaker_id_func()
-            if not speaker_id.startswith('p') or not speaker_id[1:].isdigit():
-                logger.error(f"Invalid speaker ID '{speaker_id}' provided.")
-                print(f"Error: Speaker ID '{speaker_id}' is invalid. Please use a format like 'p267'.")
-                os.remove(temp_wav_path)
-                wisdom_queue.task_done()
-                continue
-
             curl_command = [
                 'curl', '-G',
                 '--data-urlencode', f"text={wisdom}",
@@ -200,8 +193,7 @@ def text_to_speech(wisdom_queue, audio_queue, get_speaker_id_func, pitch_func, s
                     creationflags=subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0
                 )
             except subprocess.CalledProcessError as e:
-                logger.error(f"TTS failed for speaker '{speaker_id}': {e.stderr}")
-                print(f"TTS error: Server rejected speaker ID '{speaker_id}' or request failed. Details: {e.stderr}")
+                logger.error(f"TTS failed: {e.stderr}")
                 os.remove(temp_wav_path)
                 wisdom_queue.task_done()
                 continue
@@ -209,15 +201,13 @@ def text_to_speech(wisdom_queue, audio_queue, get_speaker_id_func, pitch_func, s
             if os.path.exists(temp_wav_path) and os.path.getsize(temp_wav_path) > 0 and not stop_event.is_set():
                 audio_queue.put((wisdom, temp_wav_path, pitch_func()))
             else:
-                logger.error(f"TTS produced no valid audio for '{wisdom[:50]}...' with speaker '{speaker_id}'")
-                print(f"Warning: No audio generated for speaker '{speaker_id}'. Check TTS server status.")
+                logger.error(f"TTS produced no valid audio for '{wisdom[:50]}...'")
                 os.remove(temp_wav_path)
             wisdom_queue.task_done()
         except queue.Empty:
             continue
         except Exception as e:
             logger.error(f"TTS error: {str(e)}")
-            print(f"Unexpected TTS error: {str(e)}")
             if 'temp_wav_path' in locals() and os.path.exists(temp_wav_path):
                 os.remove(temp_wav_path)
             wisdom_queue.task_done()
@@ -504,19 +494,17 @@ class InfiniteOracleGUI(tk.Tk):
     def run_animations(self):
         while self.animation_running:
             with self.animate_lock:
-                # Glow animation: always runs like a GIF, independent of audio
                 if self.glow_frames:
                     self.glow_frame_index = (self.glow_frame_index + 1) % len(self.glow_frames)
-                    glow_rotation_index = 0  # No rotation, just cycle through GIF frames
+                    glow_rotation_index = (len(self.glow_frames[self.glow_frame_index]) - 1 - (self.oracle_frame_index % len(self.glow_frames[self.glow_frame_index])))
                     self.image_canvas.itemconfig(self.glow_item, image=self.glow_frames[self.glow_frame_index][glow_rotation_index])
 
-                # Oracle animation: spins only when audio is playing
-                if self.is_audio_playing and self.oracle_frames:
+                if self.is_audio_playing:
                     self.oracle_frame_index = (self.oracle_frame_index + 1) % len(self.oracle_frames)
                     self.image_canvas.itemconfig(self.oracle_item, image=self.oracle_frames[self.oracle_frame_index])
-
-            # Adjust sleep for smoother animation: faster when spinning, slower when only glow is animating
-            time.sleep(0.05 if self.is_audio_playing else 0.1)
+                    glow_rotation_index = (len(self.glow_frames[self.glow_frame_index]) - 1 - (self.oracle_frame_index % len(self.glow_frames[self.glow_frame_index])))
+                    self.image_canvas.itemconfig(self.glow_item, image=self.glow_frames[self.glow_frame_index][glow_rotation_index])
+            time.sleep(0.1 if not self.is_audio_playing else 0.05)
 
     def update_from_config(self):
         self.config = load_config()
@@ -856,8 +844,6 @@ class InfiniteOracleGUI(tk.Tk):
 
                 with history_lock:
                     conversation_history = []
-
-                self.is_audio_playing = False
 
                 self.start_button.config(state=tk.NORMAL)
                 self.send_button.config(state=tk.NORMAL)
