@@ -339,7 +339,7 @@ class InfiniteOracleGUI(tk.Tk):
         super().__init__()
         self.title("Infinite Oracle Control Panel")
         self.state("zoomed")
-        self.geometry("1000x1000")
+        self.geometry("1200x1000")
 
         print(f"Current working directory: {os.getcwd()}")
 
