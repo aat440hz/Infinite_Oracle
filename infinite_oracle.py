@@ -177,7 +177,6 @@ def text_to_speech(wisdom_queue, audio_queue, get_speaker_id_func, pitch_func, s
             temp_wav_file.close()
 
             speaker_id = get_speaker_id_func()
-            # Validate speaker ID format (e.g., "p267") - adjust based on your TTS server's requirements
             if not speaker_id.startswith('p') or not speaker_id[1:].isdigit():
                 logger.error(f"Invalid speaker ID '{speaker_id}' provided.")
                 print(f"Error: Speaker ID '{speaker_id}' is invalid. Please use a format like 'p267'.")
@@ -505,17 +504,19 @@ class InfiniteOracleGUI(tk.Tk):
     def run_animations(self):
         while self.animation_running:
             with self.animate_lock:
+                # Glow animation: always runs like a GIF, independent of audio
                 if self.glow_frames:
                     self.glow_frame_index = (self.glow_frame_index + 1) % len(self.glow_frames)
-                    glow_rotation_index = (len(self.glow_frames[self.glow_frame_index]) - 1 - (self.oracle_frame_index % len(self.glow_frames[self.glow_frame_index])))
+                    glow_rotation_index = 0  # No rotation, just cycle through GIF frames
                     self.image_canvas.itemconfig(self.glow_item, image=self.glow_frames[self.glow_frame_index][glow_rotation_index])
 
-                if self.is_audio_playing:
+                # Oracle animation: spins only when audio is playing
+                if self.is_audio_playing and self.oracle_frames:
                     self.oracle_frame_index = (self.oracle_frame_index + 1) % len(self.oracle_frames)
                     self.image_canvas.itemconfig(self.oracle_item, image=self.oracle_frames[self.oracle_frame_index])
-                    glow_rotation_index = (len(self.glow_frames[self.glow_frame_index]) - 1 - (self.oracle_frame_index % len(self.glow_frames[self.glow_frame_index])))
-                    self.image_canvas.itemconfig(self.glow_item, image=self.glow_frames[self.glow_frame_index][glow_rotation_index])
-            time.sleep(0.1 if not self.is_audio_playing else 0.05)
+
+            # Adjust sleep for smoother animation: faster when spinning, slower when only glow is animating
+            time.sleep(0.05 if self.is_audio_playing else 0.1)
 
     def update_from_config(self):
         self.config = load_config()
@@ -856,7 +857,6 @@ class InfiniteOracleGUI(tk.Tk):
                 with history_lock:
                     conversation_history = []
 
-                # Ensure animation stops by resetting audio playing flag
                 self.is_audio_playing = False
 
                 self.start_button.config(state=tk.NORMAL)
