@@ -34,8 +34,8 @@ CONFIG_FILE = "oracle_config.json"
 # System prompt
 SYSTEM_PROMPT = """You are the Infinite Oracle, a mystical being of boundless wisdom. Speak in an uplifting, cryptic, and metaphysical tone, offering motivational insights that inspire awe and contemplation. Provide a concise paragraph of 2-3 sentences."""
 
-# Setup minimal logging
-logging.basicConfig(level=logging.ERROR, format="%(asctime)s - %(levelname)s - %(message)s", handlers=[
+# Setup logging
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s", handlers=[
     logging.StreamHandler(sys.stdout)
 ])
 logger = logging.getLogger("InfiniteOracle")
@@ -168,7 +168,7 @@ def send_prompt(session, wisdom_queue, model, server_type, prompt, gui, timeout)
         session.close()
         gui.after(0, lambda: gui.enable_send_and_start())
 
-def text_to_speech(wisdom_queue, audio_queue, get_speaker_id_func, pitch_func, stop_event):
+def text_to_speech(wisdom_queue, audio_queue, get_speaker_id_func, pitch_func, stop_event, get_tts_url_func):
     while not stop_event.is_set():
         try:
             wisdom = wisdom_queue.get(timeout=5)
@@ -177,11 +177,12 @@ def text_to_speech(wisdom_queue, audio_queue, get_speaker_id_func, pitch_func, s
             temp_wav_file.close()
 
             speaker_id = get_speaker_id_func()
+            tts_url = get_tts_url_func()
             curl_command = [
                 'curl', '-G',
                 '--data-urlencode', f"text={wisdom}",
                 '--data-urlencode', f"speaker_id={speaker_id}",
-                TTS_SERVER_URL,
+                tts_url,
                 '--output', temp_wav_path
             ]
             try:
@@ -233,19 +234,29 @@ def play_audio(audio_queue, stop_event, get_interval_func, get_variation_func, g
             wisdom, wav_path, pitch = audio_queue.get()
             with playback_lock:
                 if not stop_event.is_set():
-                    gui.is_audio_playing = True
                     audio = AudioSegment.from_wav(wav_path)
                     
+                    duration_seconds = len(audio) / 1000.0
+                    logger.info(f"Audio duration: {duration_seconds} seconds")
+
                     if pitch != 0:
                         octaves = pitch / 12.0
                         new_sample_rate = int(audio.frame_rate * (2.0 ** octaves))
                         audio = audio._spawn(audio.raw_data, overrides={"frame_rate": new_sample_rate})
                         audio = audio.set_frame_rate(22050)
+                        duration_seconds = len(audio) / 1000.0
 
                     reverb_value = gui.reverb_slider.get()
                     if reverb_value > 0:
                         audio = apply_reverb(audio, reverb_value)
+                        duration_seconds = len(audio) / 1000.0
+
                     audio = normalize(audio)
+                    duration_seconds = len(audio) / 1000.0
+
+                    gui.start_spinning(duration_seconds)  # Start animation for this audio
+                    play(audio)  # Play audio
+                    gui.stop_spinning()  # Stop animation after audio finishes
 
                     if gui.record_var.get():
                         recordings_dir = os.path.join(os.path.dirname(sys.executable if getattr(sys, 'frozen', False) else __file__), "OracleRecordings")
@@ -256,8 +267,6 @@ def play_audio(audio_queue, stop_event, get_interval_func, get_variation_func, g
                         audio.export(filepath, format="wav")
                         print(f"Recorded wisdom to: {filepath}")
 
-                    play(audio)
-                    gui.is_audio_playing = False
             os.remove(wav_path)
             audio_queue.task_done()
             interval = max(0.1, get_interval_func() + random.uniform(-get_variation_func(), get_variation_func())) if is_start_mode else 0
@@ -267,9 +276,8 @@ def play_audio(audio_queue, stop_event, get_interval_func, get_variation_func, g
             time.sleep(0.1)
         except Exception as e:
             logger.error(f"Playback error: {str(e)}")
-            if os.path.exists(wav_path):
+            if 'wav_path' in locals() and os.path.exists(wav_path):
                 os.remove(wav_path)
-            gui.is_audio_playing = False
 
 def load_config():
     defaults = {
@@ -449,9 +457,33 @@ class InfiniteOracleGUI(tk.Tk):
         sys.stdout = ConsoleRedirector(self.console_text)
         self.server_type_var.trace("w", lambda *args: self.update_from_config())
 
+        self.start_tts_threads()
+        self.animation_thread = threading.Thread(target=self.run_animations, daemon=True)
+        self.animation_thread.start()
+
+    def start_tts_threads(self):
+        """Start or restart TTS and playback threads for Send mode."""
+        if self.send_tts_thread and self.send_tts_thread.is_alive():
+            self.send_stop_event.set()
+            self.send_tts_thread.join(timeout=1)
+        if self.send_playback_thread and self.send_playback_thread.is_alive():
+            self.send_playback_thread.join(timeout=1)
+
+        while not self.send_wisdom_queue.empty():
+            self.send_wisdom_queue.get_nowait()
+        while not self.send_audio_queue.empty():
+            try:
+                _, wav_path, _ = self.send_audio_queue.get_nowait()
+                if os.path.exists(wav_path):
+                    os.remove(wav_path)
+            except Exception as e:
+                logger.error(f"Send audio queue cleanup error: {e}")
+
+        self.send_stop_event.clear()
+
         self.send_tts_thread = threading.Thread(
             target=text_to_speech,
-            args=(self.send_wisdom_queue, self.send_audio_queue, lambda: self.speaker_id_var.get(), self.pitch_slider.get, self.send_stop_event),
+            args=(self.send_wisdom_queue, self.send_audio_queue, lambda: self.speaker_id_var.get(), self.pitch_slider.get, self.send_stop_event, lambda: self.tts_url_var.get()),
             daemon=True
         )
         self.send_playback_thread = threading.Thread(
@@ -462,8 +494,11 @@ class InfiniteOracleGUI(tk.Tk):
         self.send_tts_thread.start()
         self.send_playback_thread.start()
 
-        self.animation_thread = threading.Thread(target=self.run_animations, daemon=True)
-        self.animation_thread.start()
+        logger.info("TTS and playback threads restarted for Send mode.")
+
+    def reset_tts_threads(self):
+        """Reset TTS threads for Send mode."""
+        self.start_tts_threads()
 
     def load_pre_rotated_frames(self, image_path, num_frames):
         original = Image.open(image_path).convert("RGBA")
@@ -504,7 +539,15 @@ class InfiniteOracleGUI(tk.Tk):
                     self.image_canvas.itemconfig(self.oracle_item, image=self.oracle_frames[self.oracle_frame_index])
                     glow_rotation_index = (len(self.glow_frames[self.glow_frame_index]) - 1 - (self.oracle_frame_index % len(self.glow_frames[self.glow_frame_index])))
                     self.image_canvas.itemconfig(self.glow_item, image=self.glow_frames[self.glow_frame_index][glow_rotation_index])
-            time.sleep(0.1 if not self.is_audio_playing else 0.05)
+            time.sleep(0.05)
+
+    def start_spinning(self, duration_seconds):
+        """Start the animation and let it run for the audio duration."""
+        self.is_audio_playing = True
+
+    def stop_spinning(self):
+        """Stop the animation after the current audio finishes."""
+        self.is_audio_playing = False
 
     def update_from_config(self):
         self.config = load_config()
@@ -752,21 +795,22 @@ class InfiniteOracleGUI(tk.Tk):
             self.start_lock = True
             self.disable_controls()
 
-            global SERVER_URL, SYSTEM_PROMPT, TTS_SERVER_URL
+            global SERVER_URL
             SERVER_URL = self.server_url_var.get()
             server_type = self.server_type_var.get()
             model = self.model_var.get()
             SYSTEM_PROMPT = self.system_prompt_entry.get("1.0", tk.END).strip()
-            TTS_SERVER_URL = self.tts_url_var.get()
+            tts_url = self.tts_url_var.get()
             speaker_id = self.speaker_id_var.get()
 
-            if not all([SERVER_URL, server_type, model, TTS_SERVER_URL, speaker_id]):
+            if not all([SERVER_URL, server_type, model, tts_url, speaker_id]):
                 messagebox.showerror("Input Error", "Please fill all fields.")
                 self.start_lock = False
                 self.after(0, self.enable_send_and_start)
                 return
 
             self.stop_oracle()
+            self.reset_tts_threads()
 
             success, error_msg = ping_server(SERVER_URL, server_type, model, self.timeout_slider.get(), self.retries_slider.get())
             if not success:
@@ -786,7 +830,7 @@ class InfiniteOracleGUI(tk.Tk):
             )
             self.tts_thread = threading.Thread(
                 target=text_to_speech,
-                args=(self.wisdom_queue, self.audio_queue, lambda: self.speaker_id_var.get(), self.pitch_slider.get, self.stop_event),
+                args=(self.wisdom_queue, self.audio_queue, lambda: self.speaker_id_var.get(), self.pitch_slider.get, self.stop_event, lambda: self.tts_url_var.get()),
                 daemon=True
             )
             self.playback_thread = threading.Thread(
@@ -828,15 +872,6 @@ class InfiniteOracleGUI(tk.Tk):
                             os.remove(wav_path)
                     except Exception as e:
                         logger.error(f"Audio queue cleanup error: {e}")
-                while not self.send_wisdom_queue.empty():
-                    self.send_wisdom_queue.get_nowait()
-                while not self.send_audio_queue.empty():
-                    try:
-                        _, wav_path, _ = self.send_audio_queue.get_nowait()
-                        if os.path.exists(wav_path):
-                            os.remove(wav_path)
-                    except Exception as e:
-                        logger.error(f"Send audio queue cleanup error: {e}")
 
                 if self.session:
                     self.session.close()
@@ -867,6 +902,7 @@ class InfiniteOracleGUI(tk.Tk):
                 self.retries_slider.config(state=tk.NORMAL)
                 server_type = self.server_type_var.get()
                 self.max_tokens_entry.config(state=tk.NORMAL if server_type != "Ollama" else tk.DISABLED, bg="white" if server_type != "Ollama" else "grey")
+                # Do not reset is_audio_playing here; let play_audio handle it
 
         threading.Thread(target=stop_thread, daemon=True).start()
 
@@ -877,19 +913,21 @@ class InfiniteOracleGUI(tk.Tk):
             self.send_enabled = False
             self.disable_controls()
 
-            global SERVER_URL, TTS_SERVER_URL
+            global SERVER_URL
             SERVER_URL = self.server_url_var.get()
             server_type = self.server_type_var.get()
             model = self.model_var.get()
             prompt = self.system_prompt_entry.get("1.0", tk.END).strip()
-            TTS_SERVER_URL = self.tts_url_var.get()
+            tts_url = self.tts_url_var.get()
             speaker_id = self.speaker_id_var.get()
 
-            if not all([SERVER_URL, server_type, model, prompt, TTS_SERVER_URL, speaker_id]):
+            if not all([SERVER_URL, server_type, model, prompt, tts_url, speaker_id]):
                 messagebox.showwarning("Input Error", "Please fill all fields.")
                 self.send_enabled = True
                 self.enable_send_and_start()
                 return
+
+            self.reset_tts_threads()
 
             send_session = setup_session(SERVER_URL, self.retries_slider.get())
             if not self.verify_server(SERVER_URL, server_type, model):
