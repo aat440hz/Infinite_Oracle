@@ -334,12 +334,56 @@ def save_config(gui):
     with open(CONFIG_FILE, 'w') as f:
         json.dump(config, f, indent=4)
 
+class LoadingScreen(tk.Toplevel):
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.overrideredirect(True)  # Remove window borders
+        self.geometry("300x300")
+        self.update_idletasks()
+        # Center on screen
+        screen_width = self.winfo_screenwidth()
+        screen_height = self.winfo_screenheight()
+        x = (screen_width - 300) // 2
+        y = (screen_height - 300) // 2
+        self.geometry(f"+{x}+{y}")
+
+        # Load path for oracle.png only
+        if getattr(sys, 'frozen', False):
+            base_path = sys._MEIPASS
+        else:
+            base_path = os.path.dirname(os.path.abspath(__file__))
+        oracle_path = os.path.join(base_path, "oracle.png")
+
+        # Load and resize oracle PNG (static, no rotation)
+        try:
+            original = Image.open(oracle_path).convert("RGBA")
+            resized = original.resize((150, 150), Image.Resampling.LANCZOS)
+            self.oracle_image = ImageTk.PhotoImage(resized)
+            print(f"Loaded oracle.png successfully")
+        except Exception as e:
+            logger.error(f"Loading screen oracle image failed: {e}")
+            self.oracle_image = ImageTk.PhotoImage(Image.new("RGBA", (150, 150), (0, 0, 0, 0)))
+            print("Fallback to blank image due to loading error")
+
+        self.canvas = tk.Canvas(self, width=300, height=300, bg="black", highlightthickness=0)
+        self.canvas.pack(fill="both", expand=True)
+        self.canvas.configure(bg="black")  # Set to black for transparency key
+        self.attributes("-transparentcolor", "black")  # Windows-specific transparency
+
+        # Create static oracle image
+        self.oracle_item = self.canvas.create_image(150, 150, image=self.oracle_image)
+
 class InfiniteOracleGUI(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("Infinite Oracle Control Panel")
         self.state("zoomed")
         self.geometry("1000x1000")
+        self.withdraw()  # Hide main window during initialization
+
+        # Show loading screen immediately
+        self.loading_screen = LoadingScreen(self)
+        self.update()  # Ensure loading screen renders
 
         print(f"Current working directory: {os.getcwd()}")
 
@@ -385,7 +429,7 @@ class InfiniteOracleGUI(tk.Tk):
         self.glow_frame_index = 0
         self.image_spin_speed = 5
 
-        # Load pre-rendered frames
+        # Load pre-rendered frames (this is what takes time)
         try:
             if getattr(sys, 'frozen', False):
                 base_path = sys._MEIPASS
@@ -401,6 +445,10 @@ class InfiniteOracleGUI(tk.Tk):
             logger.error(f"Pre-rendered frames load failed: {e}")
             self.oracle_frames = [ImageTk.PhotoImage(Image.new("RGBA", (200, 200), (255, 255, 255, 0)))]
             self.glow_frames = [[ImageTk.PhotoImage(Image.new("RGBA", (240, 240), (255, 255, 255, 0)))]]
+
+        # Destroy loading screen and show main window
+        self.loading_screen.destroy()
+        self.deiconify()  # Show main window
 
         self.create_widgets()
         sys.stdout = ConsoleRedirector(self.console_text)
