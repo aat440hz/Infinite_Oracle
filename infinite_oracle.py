@@ -672,7 +672,6 @@ class InfiniteOracleGUI(tk.Tk):
         self.timeout_slider.config(state=tk.DISABLED)
         self.retries_slider.config(state=tk.DISABLED)
         self.max_tokens_entry.config(state=tk.DISABLED, bg="grey")
-        self.update()
 
     def enable_send_and_start(self):
         if not self.is_running and not self.start_lock:
@@ -698,7 +697,6 @@ class InfiniteOracleGUI(tk.Tk):
             server_type = self.server_type_var.get()
             self.max_tokens_entry.config(state=tk.NORMAL if server_type != "Ollama" else tk.DISABLED, bg="white" if server_type != "Ollama" else "grey")
             self.send_enabled = True
-        self.update()
 
     def save_config_action(self):
         if not self.start_lock and self.send_enabled:
@@ -729,104 +727,87 @@ class InfiniteOracleGUI(tk.Tk):
             self.after(0, self.enable_send_and_start)
             return
 
-        self.stop_oracle()
+        def start_background():
+            self.stop_oracle()
+            success, error_msg = self.verify_server(SERVER_URL, server_type, model)
+            if not success:
+                print(error_msg)
+                self.after(0, lambda: setattr(self, 'start_lock', False))
+                self.after(0, self.enable_send_and_start)
+                return
 
-        success, error_msg = ping_server(SERVER_URL, server_type, model, self.timeout_slider.get(), self.retries_slider.get())
-        if not success:
-            print(error_msg)
-            self.start_lock = False
-            self.after(0, self.enable_send_and_start)
-            return
+            self.is_running = True
+            self.stop_event.clear()
+            self.after(0, lambda: self.stop_button.config(state=tk.NORMAL, bg="red"))
 
-        self.is_running = True
-        self.stop_event.clear()
-        self.stop_button.config(state=tk.NORMAL, bg="red")
+            self.generator_thread = threading.Thread(
+                target=generate_wisdom,
+                args=(self, self.wisdom_queue, model, server_type, self.stop_event, self.request_interval_slider.get),
+                daemon=True
+            )
+            self.tts_thread = threading.Thread(
+                target=text_to_speech,
+                args=(self.wisdom_queue, self.audio_queue, lambda: self.speaker_id_var.get(), self.pitch_slider.get, self.stop_event),
+                daemon=True
+            )
+            self.playback_thread = threading.Thread(
+                target=play_audio,
+                args=(self.audio_queue, self.stop_event, self.interval_slider.get, self.variation_slider.get, self, True),
+                daemon=True
+            )
 
-        self.generator_thread = threading.Thread(
-            target=generate_wisdom,
-            args=(self, self.wisdom_queue, model, server_type, self.stop_event, self.request_interval_slider.get),
-            daemon=True
-        )
-        self.tts_thread = threading.Thread(
-            target=text_to_speech,
-            args=(self.wisdom_queue, self.audio_queue, lambda: self.speaker_id_var.get(), self.pitch_slider.get, self.stop_event),
-            daemon=True
-        )
-        self.playback_thread = threading.Thread(
-            target=play_audio,
-            args=(self.audio_queue, self.stop_event, self.interval_slider.get, self.variation_slider.get, self, True),
-            daemon=True
-        )
+            self.generator_thread.start()
+            self.tts_thread.start()
+            self.playback_thread.start()
 
-        self.generator_thread.start()
-        self.tts_thread.start()
-        self.playback_thread.start()
+            self.after(500, lambda: setattr(self, 'start_lock', False))
 
-        self.after(500, lambda: setattr(self, 'start_lock', False))
+        threading.Thread(target=start_background, daemon=True).start()
 
     def stop_oracle(self):
-        global conversation_history
         if self.is_running:
             self.is_running = False
             self.stop_event.set()
-            if self.generator_thread:
-                self.generator_thread.join(timeout=1)
-                self.generator_thread = None
-            if self.tts_thread:
-                self.tts_thread.join(timeout=1)
-                self.tts_thread = None
-            if self.playback_thread:
-                self.playback_thread.join(timeout=1)
-                self.playback_thread = None
 
-            while not self.wisdom_queue.empty():
-                self.wisdom_queue.get_nowait()
-            while not self.audio_queue.empty():
-                try:
-                    _, wav_path, _ = self.audio_queue.get_nowait()
-                    if os.path.exists(wav_path):
-                        os.remove(wav_path)
-                except Exception as e:
-                    logger.error(f"Audio queue cleanup error: {e}")
-            while not self.send_wisdom_queue.empty():
-                self.send_wisdom_queue.get_nowait()
-            while not self.send_audio_queue.empty():
-                try:
-                    _, wav_path, _ = self.send_audio_queue.get_nowait()
-                    if os.path.exists(wav_path):
-                        os.remove(wav_path)
-                except Exception as e:
-                    logger.error(f"Send audio queue cleanup error: {e}")
+            def cleanup_background():
+                if self.generator_thread:
+                    self.generator_thread.join(timeout=1)
+                if self.tts_thread:
+                    self.tts_thread.join(timeout=1)
+                if self.playback_thread:
+                    self.playback_thread.join(timeout=1)
 
-            if self.session:
-                self.session.close()
-                self.session = None
+                while not self.wisdom_queue.empty():
+                    self.wisdom_queue.get_nowait()
+                while not self.audio_queue.empty():
+                    try:
+                        _, wav_path, _ = self.audio_queue.get_nowait()
+                        if os.path.exists(wav_path):
+                            os.remove(wav_path)
+                    except Exception as e:
+                        logger.error(f"Audio queue cleanup error: {e}")
+                while not self.send_wisdom_queue.empty():
+                    self.send_wisdom_queue.get_nowait()
+                while not self.send_audio_queue.empty():
+                    try:
+                        _, wav_path, _ = self.send_audio_queue.get_nowait()
+                        if os.path.exists(wav_path):
+                            os.remove(wav_path)
+                    except Exception as e:
+                        logger.error(f"Send audio queue cleanup error: {e}")
 
-            with history_lock:
-                conversation_history = []
+                if self.session:
+                    self.session.close()
+                    self.session = None
 
-            self.start_button.config(state=tk.NORMAL)
-            self.send_button.config(state=tk.NORMAL)
-            self.save_button.config(state=tk.NORMAL)
-            self.clear_button.config(state=tk.NORMAL if self.remember_var.get() else tk.DISABLED)
-            self.remember_check.config(state=tk.NORMAL)
-            self.record_button.config(state=tk.NORMAL)
-            self.server_type_menu.config(state=tk.NORMAL)
-            self.server_url_entry.config(state=tk.NORMAL)
-            self.model_entry.config(state=tk.NORMAL)
-            self.tts_url_entry.config(state=tk.NORMAL)
-            self.speaker_id_entry.config(state=tk.NORMAL)
-            self.system_prompt_entry.config(state=tk.NORMAL)
-            self.stop_button.config(state=tk.DISABLED, bg="lightgray")
-            self.pitch_slider.config(state=tk.NORMAL)
-            self.reverb_slider.config(state=tk.NORMAL)
-            self.interval_slider.config(state=tk.NORMAL)
-            self.variation_slider.config(state=tk.NORMAL)
-            self.request_interval_slider.config(state=tk.NORMAL)
-            self.timeout_slider.config(state=tk.NORMAL)
-            self.retries_slider.config(state=tk.NORMAL)
-            server_type = self.server_type_var.get()
-            self.max_tokens_entry.config(state=tk.NORMAL if server_type != "Ollama" else tk.DISABLED, bg="white" if server_type != "Ollama" else "grey")
+                with history_lock:
+                    global conversation_history
+                    conversation_history = []
+
+                self.after(0, self.enable_send_and_start)
+                self.after(0, lambda: self.stop_button.config(state=tk.DISABLED, bg="lightgray"))
+
+            threading.Thread(target=cleanup_background, daemon=True).start()
 
     def send_prompt_action(self):
         if not self.send_enabled or self.start_lock:
@@ -845,21 +826,26 @@ class InfiniteOracleGUI(tk.Tk):
         if not all([SERVER_URL, server_type, model, prompt, TTS_SERVER_URL, speaker_id]):
             messagebox.showwarning("Input Error", "Please fill all fields.")
             self.send_enabled = True
-            self.enable_send_and_start()
-            return
-
-        send_session = setup_session(SERVER_URL, self.retries_slider.get())
-        if not self.verify_server(SERVER_URL, server_type, model):
-            send_session.close()
-            self.send_enabled = True
             self.after(0, self.enable_send_and_start)
             return
 
-        threading.Thread(
-            target=send_prompt,
-            args=(send_session, self.send_wisdom_queue, model, server_type, prompt, self, self.timeout_slider.get()),
-            daemon=True
-        ).start()
+        def send_background():
+            send_session = setup_session(SERVER_URL, self.retries_slider.get())
+            success, error_msg = self.verify_server(SERVER_URL, server_type, model)
+            if not success:
+                print(error_msg)
+                send_session.close()
+                self.send_enabled = True
+                self.after(0, self.enable_send_and_start)
+                return
+
+            threading.Thread(
+                target=send_prompt,
+                args=(send_session, self.send_wisdom_queue, model, server_type, prompt, self, self.timeout_slider.get()),
+                daemon=True
+            ).start()
+
+        threading.Thread(target=send_background, daemon=True).start()
 
     def clear_history(self):
         if self.start_lock or not self.send_enabled:
