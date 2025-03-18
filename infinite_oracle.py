@@ -637,7 +637,7 @@ class InfiniteOracleGUI(tk.Tk):
     def animate_gif(self):
         if self.glow_frames:
             self.glow_frame_index = (self.glow_frame_index + 1) % len(self.glow_frames)
-            glow_rotation_index = self.oracle_frame_index % len(self.glow_frames[self.glow_frame_index])
+            glow_rotation_index = (len(self.glow_frames[self.glow_frame_index]) - 1 - (self.oracle_frame_index % len(self.glow_frames[self.glow_frame_index])))
             self.image_canvas.itemconfig(self.glow_item, image=self.glow_frames[self.glow_frame_index][glow_rotation_index])
         self.after(100, self.animate_gif)
 
@@ -645,7 +645,7 @@ class InfiniteOracleGUI(tk.Tk):
         if self.is_audio_playing:
             self.oracle_frame_index = (self.oracle_frame_index + 1) % len(self.oracle_frames)
             self.image_canvas.itemconfig(self.oracle_item, image=self.oracle_frames[self.oracle_frame_index])
-            glow_rotation_index = self.oracle_frame_index % len(self.glow_frames[self.glow_frame_index])
+            glow_rotation_index = (len(self.glow_frames[self.glow_frame_index]) - 1 - (self.oracle_frame_index % len(self.glow_frames[self.glow_frame_index])))
             self.image_canvas.itemconfig(self.glow_item, image=self.glow_frames[self.glow_frame_index][glow_rotation_index])
             self.after(50, self.animate_images)
         else:
