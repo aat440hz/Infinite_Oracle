@@ -106,7 +106,7 @@ def generate_wisdom(gui, wisdom_queue, model, server_type, stop_event, get_reque
             payload["max_tokens"] = int(gui.max_tokens_entry.get())
             payload["temperature"] = 0.7
         
-        session = setup_session(SERVER_URL, retries=0)
+        session = setup_session(SERVER_URL, retries=gui.retries_slider.get())  # Use slider value
         try:
             response = session.post(SERVER_URL, json=payload, timeout=gui.timeout_slider.get())
             response.raise_for_status()
