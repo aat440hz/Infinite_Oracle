@@ -505,17 +505,16 @@ class InfiniteOracleGUI(tk.Tk):
     def run_animations(self):
         while self.animation_running:
             with self.animate_lock:
-                if self.is_running or self.is_audio_playing:  # Only animate if running or audio is playing
-                    if self.glow_frames:
-                        self.glow_frame_index = (self.glow_frame_index + 1) % len(self.glow_frames)
-                        glow_rotation_index = (len(self.glow_frames[self.glow_frame_index]) - 1 - (self.oracle_frame_index % len(self.glow_frames[self.glow_frame_index])))
-                        self.image_canvas.itemconfig(self.glow_item, image=self.glow_frames[self.glow_frame_index][glow_rotation_index])
+                if self.glow_frames:
+                    self.glow_frame_index = (self.glow_frame_index + 1) % len(self.glow_frames)
+                    glow_rotation_index = (len(self.glow_frames[self.glow_frame_index]) - 1 - (self.oracle_frame_index % len(self.glow_frames[self.glow_frame_index])))
+                    self.image_canvas.itemconfig(self.glow_item, image=self.glow_frames[self.glow_frame_index][glow_rotation_index])
 
-                    if self.is_audio_playing:
-                        self.oracle_frame_index = (self.oracle_frame_index + 1) % len(self.oracle_frames)
-                        self.image_canvas.itemconfig(self.oracle_item, image=self.oracle_frames[self.oracle_frame_index])
-                        glow_rotation_index = (len(self.glow_frames[self.glow_frame_index]) - 1 - (self.oracle_frame_index % len(self.glow_frames[self.glow_frame_index])))
-                        self.image_canvas.itemconfig(self.glow_item, image=self.glow_frames[self.glow_frame_index][glow_rotation_index])
+                if self.is_audio_playing:
+                    self.oracle_frame_index = (self.oracle_frame_index + 1) % len(self.oracle_frames)
+                    self.image_canvas.itemconfig(self.oracle_item, image=self.oracle_frames[self.oracle_frame_index])
+                    glow_rotation_index = (len(self.glow_frames[self.glow_frame_index]) - 1 - (self.oracle_frame_index % len(self.glow_frames[self.glow_frame_index])))
+                    self.image_canvas.itemconfig(self.glow_item, image=self.glow_frames[self.glow_frame_index][glow_rotation_index])
             time.sleep(0.1 if not self.is_audio_playing else 0.05)
 
     def update_from_config(self):
