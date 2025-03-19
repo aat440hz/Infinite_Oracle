@@ -101,7 +101,7 @@ LM Studio is an optional AI backend at `http://localhost:1234/v1/chat/completion
 With the servers ready, launch the Oracle executable.
 
 1. **Download the Executable**:
-   - Grab `infinite_oracle.exe` from [Releases](https://github.com/yourusername/infinite-oracle/releases).
+   - Grab `infinite_oracle.exe` from [Releases](https://github.com/aat440hz/infinite-oracle/releases).
    - Place it in a folder (e.g., `C:\InfiniteOracle`).
 
 2. **Launch the Oracle**:
@@ -118,9 +118,3 @@ With the servers ready, launch the Oracle executable.
 - **No Sound**: Check Docker Desktop; ensure `coqui-tts` is "Running" (click "Start" if stopped).
 - **Ollama/LM Studio Fails**: Verify they’re active and ports (11434/1234) aren’t blocked (`netstat -aon | findstr 11434`).
 - **EXE Won’t Run**: Ensure Docker and at least one AI server (Ollama or LM Studio) are up.
-
-## Contributing
-Fork, tweak, and submit a PR—help the Oracle grow wiser!
-
-## License
-MIT License—free to use, modify, and share.
