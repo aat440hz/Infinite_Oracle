@@ -109,6 +109,7 @@ def generate_wisdom(gui, wisdom_queue, model, get_server_type_func, stop_event, 
             payload["temperature"] = 0.7
         
         session = setup_session(server_url, retries=gui.retries_slider.get())
+        start_time = time.time()  # Fix 3: Track request start time
         try:
             response = session.post(server_url, json=payload, timeout=gui.timeout_slider.get())
             response.raise_for_status()
@@ -131,7 +132,9 @@ def generate_wisdom(gui, wisdom_queue, model, get_server_type_func, stop_event, 
             session.close()
         
         if not stop_event.is_set():
-            time.sleep(get_request_interval_func())
+            elapsed = time.time() - start_time  # Fix 3: Calculate elapsed time
+            sleep_time = max(0, get_request_interval_func() - elapsed)  # Fix 3: Adjust sleep
+            time.sleep(sleep_time)
 
 def send_prompt(session, wisdom_queue, model, server_type, prompt, gui, timeout):
     global conversation_history
@@ -208,6 +211,7 @@ def text_to_speech(wisdom_queue, audio_queue, get_speaker_id_func, pitch_func, s
                 os.remove(temp_wav_path)
             wisdom_queue.task_done()
         except queue.Empty:
+            time.sleep(0.1)
             continue
         except Exception as e:
             logger.error(f"TTS error: {str(e)}")
@@ -271,15 +275,18 @@ def play_audio(audio_queue, stop_event, get_interval_func, get_variation_func, g
 
             os.remove(wav_path)
             audio_queue.task_done()
-            interval = max(0.1, get_interval_func() + random.uniform(-get_variation_func(), get_variation_func())) if is_start_mode else 0
-            if not stop_event.is_set():
-                time.sleep(interval)
         except queue.Empty:
             time.sleep(0.1)
+            continue
         except Exception as e:
             logger.error(f"Playback error: {str(e)}")
             if 'wav_path' in locals() and os.path.exists(wav_path):
                 os.remove(wav_path)
+            audio_queue.task_done()
+        # Fix 2: Apply interval outside try-except
+        if not stop_event.is_set():
+            interval = max(0.1, get_interval_func() + random.uniform(-get_variation_func(), get_variation_func())) if is_start_mode else 0
+            time.sleep(interval)
 
 def load_config():
     defaults = {
@@ -869,6 +876,16 @@ class InfiniteOracleGUI(tk.Tk):
                             os.remove(wav_path)
                     except Exception as e:
                         logger.error(f"Audio queue cleanup error: {e}")
+                # Fix 1: Clear send queues
+                while not self.send_wisdom_queue.empty():
+                    self.send_wisdom_queue.get_nowait()
+                while not self.send_audio_queue.empty():
+                    try:
+                        _, wav_path, _ = self.send_audio_queue.get_nowait()
+                        if os.path.exists(wav_path):
+                            os.remove(wav_path)
+                    except Exception as e:
+                        logger.error(f"Send audio queue cleanup error: {e}")
 
                 if self.session:
                     self.session.close()
