@@ -354,7 +354,12 @@ class InfiniteOracleGUI(tk.Tk):
         self.geometry("1440x1080")
         self.withdraw()
 
-        # Force working directory at startup
+        # Redirect output for exe
+        if getattr(sys, 'frozen', False):
+            log_file = os.path.join(os.path.dirname(sys.executable), "oracle.log")
+            sys.stdout = open(log_file, 'w')
+            sys.stderr = sys.stdout
+
         os.chdir(os.path.dirname(os.path.abspath(__file__)))
         print(f"Adjusted working directory to: {os.getcwd()}")
 
@@ -375,7 +380,12 @@ class InfiniteOracleGUI(tk.Tk):
             logger.error(f"Icon load failed: {e}")
 
         try:
-            self.whisper_model = whisper.load_model("base", download_root="whisper/models" if getattr(sys, 'frozen', False) else None)
+            if getattr(sys, 'frozen', False):
+                base_path = sys._MEIPASS
+                whisper_model_path = os.path.join(base_path, "base", "whisper")
+                self.whisper_model = whisper.load_model("base", download_root=whisper_model_path)
+            else:
+                self.whisper_model = whisper.load_model("base", download_root="whisper/models" if getattr(sys, 'frozen', False) else None)
             print("Whisper model loaded successfully!")
         except Exception as e:
             logger.error(f"Failed to load Whisper model: {e}")
