@@ -1,6 +1,6 @@
 # Infinite Oracle
 
-Welcome to the Infinite Oracle—a mystical standalone application that channels boundless wisdom through a cryptic, uplifting voice. Powered by AI language models and text-to-speech, this executable delivers motivational insights with a metaphysical flair. This README will guide you through setting up the required services on Windows using Docker Desktop for Coqui TTS, and standalone installers for Ollama and LM Studio.
+Welcome to the Infinite Oracle—a mystical standalone application that channels boundless wisdom. Powered by AI language models and text-to-speech, this executable delivers motivational insights with a metaphysical flair. This README will guide you through setting up the required services on Windows using Docker Desktop for Coqui TTS, and standalone installers for Ollama and LM Studio.
 
 ## Features
 - **Mystical Wisdom**: Generate concise, awe-inspiring paragraphs.
