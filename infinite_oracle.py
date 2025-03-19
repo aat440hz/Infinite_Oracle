@@ -93,7 +93,7 @@ def ping_server(server_url, server_type, model, timeout, retries):
 def generate_wisdom(gui, wisdom_queue, model, get_server_type_func, stop_event, get_request_interval_func):
     global conversation_history
     while not stop_event.is_set():
-        server_url = gui.server_url_var.get()  # Fetch dynamically
+        server_url = gui.server_url_var.get()
         server_type = get_server_type_func()
         with history_lock:
             if not gui.remember_var.get():
@@ -132,43 +132,6 @@ def generate_wisdom(gui, wisdom_queue, model, get_server_type_func, stop_event, 
         
         if not stop_event.is_set():
             time.sleep(get_request_interval_func())
-
-def send_prompt(session, wisdom_queue, model, server_type, prompt, gui, timeout):
-    global conversation_history
-    with history_lock:
-        if not gui.remember_var.get():
-            conversation_history = []
-        messages = [{"role": "system", "content": SYSTEM_PROMPT}] + conversation_history + [{"role": "user", "content": prompt}]
-    payload = {
-        "model": model,
-        "messages": messages,
-        "stream": False
-    }
-    if server_type != "Ollama":
-        payload["max_tokens"] = int(gui.max_tokens_entry.get())
-        payload["temperature"] = 0.7
-    
-    try:
-        response = session.post(gui.server_url_var.get(), json=payload, timeout=timeout)
-        response.raise_for_status()
-        data = response.json()
-        wisdom = (
-            data.get("message", {}).get("content", "").strip() if server_type == "Ollama"
-            else data.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
-        )
-        if wisdom:
-            print(f"The Infinite Oracle speaks: {wisdom}", end="\n\n")
-            with history_lock:
-                if gui.remember_var.get():
-                    conversation_history.append({"role": "user", "content": prompt})
-                    conversation_history.append({"role": "assistant", "content": wisdom})
-            wisdom_queue.put(wisdom)
-    except requests.RequestException as e:
-        logger.error(f"{server_type} connection failed: {str(e)}")
-        print(f"{server_type} error: {str(e)}")
-    finally:
-        session.close()
-        gui.after(0, lambda: gui.enable_send_and_start())
 
 def text_to_speech(wisdom_queue, audio_queue, get_speaker_id_func, pitch_func, stop_event, get_tts_url_func):
     while not stop_event.is_set():
@@ -237,7 +200,6 @@ def play_audio(audio_queue, stop_event, get_interval_func, get_variation_func, g
             with playback_lock:
                 if not stop_event.is_set():
                     audio = AudioSegment.from_wav(wav_path)
-                    
                     duration_seconds = len(audio) / 1000.0
                     logger.info(f"Audio duration: {duration_seconds} seconds")
 
@@ -246,17 +208,13 @@ def play_audio(audio_queue, stop_event, get_interval_func, get_variation_func, g
                         new_sample_rate = int(audio.frame_rate * (2.0 ** octaves))
                         audio = audio._spawn(audio.raw_data, overrides={"frame_rate": new_sample_rate})
                         audio = audio.set_frame_rate(22050)
-                        duration_seconds = len(audio) / 1000.0
 
                     reverb_value = gui.reverb_slider.get()
                     if reverb_value > 0:
                         audio = apply_reverb(audio, reverb_value)
-                        duration_seconds = len(audio) / 1000.0
 
                     audio = normalize(audio)
-                    duration_seconds = len(audio) / 1000.0
-
-                    gui.start_spinning(duration_seconds)
+                    gui.start_spinning(len(audio) / 1000.0)
                     play(audio)
                     gui.stop_spinning()
 
@@ -280,6 +238,9 @@ def play_audio(audio_queue, stop_event, get_interval_func, get_variation_func, g
             logger.error(f"Playback error: {str(e)}")
             if 'wav_path' in locals() and os.path.exists(wav_path):
                 os.remove(wav_path)
+            gui.send_enabled = True
+            gui.start_lock = False
+            gui.after(0, gui.enable_send_and_start)
 
 def load_config():
     defaults = {
@@ -907,6 +868,7 @@ class InfiniteOracleGUI(tk.Tk):
             if not self.send_enabled or self.start_lock:
                 return
             self.send_enabled = False
+            self.start_lock = True  # Lock Start button until playback begins
             self.disable_controls()
 
             server_url = self.server_url_var.get()
@@ -919,25 +881,97 @@ class InfiniteOracleGUI(tk.Tk):
             if not all([server_url, server_type, model, prompt, tts_url, speaker_id]):
                 messagebox.showwarning("Input Error", "Please fill all fields.")
                 self.send_enabled = True
-                self.enable_send_and_start()
+                self.start_lock = False
+                self.after(0, self.enable_send_and_start)
                 return
 
             self.reset_tts_threads()
 
             send_session = setup_session(server_url, self.retries_slider.get())
-            if not self.verify_server(server_url, server_type, model):
+            success, error_msg = self.verify_server(server_url, server_type, model)
+            if not success:
+                print(error_msg)
                 send_session.close()
                 self.send_enabled = True
+                self.start_lock = False
                 self.after(0, self.enable_send_and_start)
                 return
 
-            threading.Thread(
-                target=send_prompt,
-                args=(send_session, self.send_wisdom_queue, model, server_type, prompt, self, self.timeout_slider.get()),
+            send_thread = threading.Thread(
+                target=self.send_prompt_with_tts_tracking,
+                args=(send_session, self.send_wisdom_queue, model, server_type, prompt, self.send_audio_queue),
                 daemon=True
-            ).start()
+            )
+            send_thread.start()
 
         threading.Thread(target=send_thread, daemon=True).start()
+
+    def send_prompt_with_tts_tracking(self, session, wisdom_queue, model, server_type, prompt, audio_queue):
+        global conversation_history
+        try:
+            with history_lock:
+                if not self.remember_var.get():
+                    conversation_history = []
+                messages = [{"role": "system", "content": SYSTEM_PROMPT}] + conversation_history + [{"role": "user", "content": prompt}]
+            payload = {
+                "model": model,
+                "messages": messages,
+                "stream": False
+            }
+            if server_type != "Ollama":
+                payload["max_tokens"] = int(self.max_tokens_entry.get())
+                payload["temperature"] = 0.7
+
+            response = session.post(self.server_url_var.get(), json=payload, timeout=self.timeout_slider.get())
+            response.raise_for_status()
+            data = response.json()
+            wisdom = (
+                data.get("message", {}).get("content", "").strip() if server_type == "Ollama"
+                else data.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+            )
+
+            if wisdom:
+                print(f"The Infinite Oracle speaks: {wisdom}", end="\n\n")
+                with history_lock:
+                    if self.remember_var.get():
+                        conversation_history.append({"role": "user", "content": prompt})
+                        conversation_history.append({"role": "assistant", "content": wisdom})
+                wisdom_queue.put(wisdom)
+
+                try:
+                    wisdom, wav_path, pitch = audio_queue.get(timeout=10)
+                    if os.path.exists(wav_path) and os.path.getsize(wav_path) > 0:
+                        self.after(0, lambda: self.wait_for_playback(wav_path))
+                    else:
+                        logger.error("TTS produced no valid audio.")
+                        os.remove(wav_path)
+                        self.send_enabled = True
+                        self.start_lock = False
+                        self.after(0, self.enable_send_and_start)
+                except queue.Empty:
+                    logger.error("TTS timeout or connection issue.")
+                    self.send_enabled = True
+                    self.start_lock = False
+                    self.after(0, self.enable_send_and_start)
+
+        except requests.RequestException as e:
+            logger.error(f"{server_type} connection failed: {str(e)}")
+            print(f"{server_type} error: {str(e)}")
+            self.send_enabled = True
+            self.start_lock = False
+            self.after(0, self.enable_send_and_start)
+        finally:
+            session.close()
+
+    def wait_for_playback(self, wav_path):
+        def check_playback():
+            with playback_lock:
+                if self.is_audio_playing:
+                    self.start_lock = False
+                    self.after(0, self.enable_send_and_start)
+                else:
+                    self.after(100, check_playback)
+        self.after(100, check_playback)
 
     def clear_history(self):
         if self.start_lock or not self.send_enabled:
