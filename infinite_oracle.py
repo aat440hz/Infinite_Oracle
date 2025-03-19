@@ -90,9 +90,11 @@ def ping_server(server_url, server_type, model, timeout, retries):
     finally:
         session.close()
 
-def generate_wisdom(gui, wisdom_queue, model, server_type, stop_event, get_request_interval_func):
+def generate_wisdom(gui, wisdom_queue, model, get_server_type_func, stop_event, get_request_interval_func):
     global conversation_history
     while not stop_event.is_set():
+        server_url = gui.server_url_var.get()  # Fetch dynamically
+        server_type = get_server_type_func()
         with history_lock:
             if not gui.remember_var.get():
                 conversation_history = []
@@ -106,9 +108,9 @@ def generate_wisdom(gui, wisdom_queue, model, server_type, stop_event, get_reque
             payload["max_tokens"] = int(gui.max_tokens_entry.get())
             payload["temperature"] = 0.7
         
-        session = setup_session(SERVER_URL, retries=gui.retries_slider.get())
+        session = setup_session(server_url, retries=gui.retries_slider.get())
         try:
-            response = session.post(SERVER_URL, json=payload, timeout=gui.timeout_slider.get())
+            response = session.post(server_url, json=payload, timeout=gui.timeout_slider.get())
             response.raise_for_status()
             data = response.json()
             wisdom = (
@@ -147,7 +149,7 @@ def send_prompt(session, wisdom_queue, model, server_type, prompt, gui, timeout)
         payload["temperature"] = 0.7
     
     try:
-        response = session.post(SERVER_URL, json=payload, timeout=timeout)
+        response = session.post(gui.server_url_var.get(), json=payload, timeout=timeout)
         response.raise_for_status()
         data = response.json()
         wisdom = (
@@ -254,9 +256,9 @@ def play_audio(audio_queue, stop_event, get_interval_func, get_variation_func, g
                     audio = normalize(audio)
                     duration_seconds = len(audio) / 1000.0
 
-                    gui.start_spinning(duration_seconds)  # Start animation for this audio
-                    play(audio)  # Play audio
-                    gui.stop_spinning()  # Stop animation after audio finishes
+                    gui.start_spinning(duration_seconds)
+                    play(audio)
+                    gui.stop_spinning()
 
                     if gui.record_var.get():
                         recordings_dir = os.path.join(os.path.dirname(sys.executable if getattr(sys, 'frozen', False) else __file__), "OracleRecordings")
@@ -462,7 +464,6 @@ class InfiniteOracleGUI(tk.Tk):
         self.animation_thread.start()
 
     def start_tts_threads(self):
-        """Start or restart TTS and playback threads for Send mode."""
         if self.send_tts_thread and self.send_tts_thread.is_alive():
             self.send_stop_event.set()
             self.send_tts_thread.join(timeout=1)
@@ -497,7 +498,6 @@ class InfiniteOracleGUI(tk.Tk):
         logger.info("TTS and playback threads restarted for Send mode.")
 
     def reset_tts_threads(self):
-        """Reset TTS threads for Send mode."""
         self.start_tts_threads()
 
     def load_pre_rotated_frames(self, image_path, num_frames):
@@ -542,11 +542,9 @@ class InfiniteOracleGUI(tk.Tk):
             time.sleep(0.05)
 
     def start_spinning(self, duration_seconds):
-        """Start the animation and let it run for the audio duration."""
         self.is_audio_playing = True
 
     def stop_spinning(self):
-        """Stop the animation after the current audio finishes."""
         self.is_audio_playing = False
 
     def update_from_config(self):
@@ -795,15 +793,14 @@ class InfiniteOracleGUI(tk.Tk):
             self.start_lock = True
             self.disable_controls()
 
-            global SERVER_URL
-            SERVER_URL = self.server_url_var.get()
+            server_url = self.server_url_var.get()
             server_type = self.server_type_var.get()
             model = self.model_var.get()
             SYSTEM_PROMPT = self.system_prompt_entry.get("1.0", tk.END).strip()
             tts_url = self.tts_url_var.get()
             speaker_id = self.speaker_id_var.get()
 
-            if not all([SERVER_URL, server_type, model, tts_url, speaker_id]):
+            if not all([server_url, server_type, model, tts_url, speaker_id]):
                 messagebox.showerror("Input Error", "Please fill all fields.")
                 self.start_lock = False
                 self.after(0, self.enable_send_and_start)
@@ -812,7 +809,7 @@ class InfiniteOracleGUI(tk.Tk):
             self.stop_oracle()
             self.reset_tts_threads()
 
-            success, error_msg = ping_server(SERVER_URL, server_type, model, self.timeout_slider.get(), self.retries_slider.get())
+            success, error_msg = ping_server(server_url, server_type, model, self.timeout_slider.get(), self.retries_slider.get())
             if not success:
                 print(error_msg)
                 self.start_lock = False
@@ -825,7 +822,7 @@ class InfiniteOracleGUI(tk.Tk):
 
             self.generator_thread = threading.Thread(
                 target=generate_wisdom,
-                args=(self, self.wisdom_queue, model, server_type, self.stop_event, self.request_interval_slider.get),
+                args=(self, self.wisdom_queue, model, lambda: self.server_type_var.get(), self.stop_event, self.request_interval_slider.get),
                 daemon=True
             )
             self.tts_thread = threading.Thread(
@@ -902,7 +899,6 @@ class InfiniteOracleGUI(tk.Tk):
                 self.retries_slider.config(state=tk.NORMAL)
                 server_type = self.server_type_var.get()
                 self.max_tokens_entry.config(state=tk.NORMAL if server_type != "Ollama" else tk.DISABLED, bg="white" if server_type != "Ollama" else "grey")
-                # Do not reset is_audio_playing here; let play_audio handle it
 
         threading.Thread(target=stop_thread, daemon=True).start()
 
@@ -913,15 +909,14 @@ class InfiniteOracleGUI(tk.Tk):
             self.send_enabled = False
             self.disable_controls()
 
-            global SERVER_URL
-            SERVER_URL = self.server_url_var.get()
+            server_url = self.server_url_var.get()
             server_type = self.server_type_var.get()
             model = self.model_var.get()
             prompt = self.system_prompt_entry.get("1.0", tk.END).strip()
             tts_url = self.tts_url_var.get()
             speaker_id = self.speaker_id_var.get()
 
-            if not all([SERVER_URL, server_type, model, prompt, tts_url, speaker_id]):
+            if not all([server_url, server_type, model, prompt, tts_url, speaker_id]):
                 messagebox.showwarning("Input Error", "Please fill all fields.")
                 self.send_enabled = True
                 self.enable_send_and_start()
@@ -929,8 +924,8 @@ class InfiniteOracleGUI(tk.Tk):
 
             self.reset_tts_threads()
 
-            send_session = setup_session(SERVER_URL, self.retries_slider.get())
-            if not self.verify_server(SERVER_URL, server_type, model):
+            send_session = setup_session(server_url, self.retries_slider.get())
+            if not self.verify_server(server_url, server_type, model):
                 send_session.close()
                 self.send_enabled = True
                 self.after(0, self.enable_send_and_start)
