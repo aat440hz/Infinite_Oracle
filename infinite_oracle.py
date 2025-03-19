@@ -19,7 +19,7 @@ from pydub.effects import normalize
 from pydub.playback import play
 import random
 from PIL import Image, ImageTk, ImageSequence
-import whisper
+import speech_recognition as sr
 from threading import Event
 
 # Server defaults
@@ -158,13 +158,11 @@ def text_to_speech(wisdom_queue, audio_queue, get_speaker_id_func, pitch_func, s
                     check=True,
                     capture_output=True,
                     text=True,
-                    creationflags=subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0,
-                    timeout=20
+                    creationflags=subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0
                 )
-            except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
-                logger.error(f"TTS failed: {e.stderr if hasattr(e, 'stderr') else str(e)}")
-                if os.path.exists(temp_wav_path):
-                    os.remove(temp_wav_path)
+            except subprocess.CalledProcessError as e:
+                logger.error(f"TTS failed: {e.stderr}")
+                os.remove(temp_wav_path)
                 wisdom_queue.task_done()
                 continue
 
@@ -172,8 +170,7 @@ def text_to_speech(wisdom_queue, audio_queue, get_speaker_id_func, pitch_func, s
                 audio_queue.put((wisdom, temp_wav_path, pitch_func()))
             else:
                 logger.error(f"TTS produced no valid audio for '{wisdom[:50]}...'")
-                if os.path.exists(temp_wav_path):
-                    os.remove(temp_wav_path)
+                os.remove(temp_wav_path)
             wisdom_queue.task_done()
         except queue.Empty:
             continue
@@ -243,6 +240,7 @@ def play_audio(audio_queue, stop_event, get_interval_func, get_variation_func, g
             logger.error(f"Playback error: {str(e)}")
             if 'wav_path' in locals() and os.path.exists(wav_path):
                 os.remove(wav_path)
+            # Ensure GUI unlocks even if playback fails in voice mode
             if not gui.voice_mode.get():
                 gui.send_enabled = True
                 gui.start_lock = False
@@ -354,17 +352,10 @@ class InfiniteOracleGUI(tk.Tk):
         self.geometry("1440x1080")
         self.withdraw()
 
-        # Redirect output for exe
-        if getattr(sys, 'frozen', False):
-            log_file = os.path.join(os.path.dirname(sys.executable), "oracle.log")
-            sys.stdout = open(log_file, 'w')
-            sys.stderr = sys.stdout
-
-        os.chdir(os.path.dirname(os.path.abspath(__file__)))
-        print(f"Adjusted working directory to: {os.getcwd()}")
-
         self.loading_screen = LoadingScreen(self)
         self.update()
+
+        print(f"Current working directory: {os.getcwd()}")
 
         try:
             if getattr(sys, 'frozen', False):
@@ -378,18 +369,6 @@ class InfiniteOracleGUI(tk.Tk):
             print(f"Icon loaded from {icon_path}")
         except Exception as e:
             logger.error(f"Icon load failed: {e}")
-
-        try:
-            if getattr(sys, 'frozen', False):
-                base_path = sys._MEIPASS
-                whisper_model_path = os.path.join(base_path, "base", "whisper")
-                self.whisper_model = whisper.load_model("base", download_root=whisper_model_path)
-            else:
-                self.whisper_model = whisper.load_model("base", download_root="whisper/models" if getattr(sys, 'frozen', False) else None)
-            print("Whisper model loaded successfully!")
-        except Exception as e:
-            logger.error(f"Failed to load Whisper model: {e}")
-            self.whisper_model = None
 
         self.config = load_config()
         self.server_type_var = tk.StringVar(value="Ollama")
@@ -421,6 +400,7 @@ class InfiniteOracleGUI(tk.Tk):
         self.image_spin_speed = 5
         self.animation_running = True
         self.animate_lock = threading.Lock()
+        # Voice assistant variables
         self.voice_mode = tk.BooleanVar(value=False)
         self.voice_stop_event = Event()
         self.voice_thread = None
@@ -432,7 +412,7 @@ class InfiniteOracleGUI(tk.Tk):
                 base_path = os.path.dirname(os.path.abspath(__file__))
             self.image_path = os.path.join(base_path, "oracle.png")
             self.glow_path = os.path.join(base_path, "glow.gif")
-            self.beep_path = os.path.join(base_path, "beep.wav")
+            self.beep_path = os.path.join(base_path, "beep.wav")  # Add beep sound file
             
             self.oracle_frames = self.load_pre_rotated_frames(self.image_path, 36)
             self.glow_base_frames = self.load_gif_frames(self.glow_path)
@@ -974,7 +954,7 @@ class InfiniteOracleGUI(tk.Tk):
                 wisdom_queue.put(wisdom)
 
                 try:
-                    wisdom, wav_path, pitch = audio_queue.get(timeout=20)
+                    wisdom, wav_path, pitch = audio_queue.get(timeout=10)
                     if os.path.exists(wav_path) and os.path.getsize(wav_path) > 0:
                         self.after(0, lambda: self.wait_for_playback(wav_path))
                     else:
@@ -1041,13 +1021,13 @@ class InfiniteOracleGUI(tk.Tk):
         if self.voice_mode.get():
             self.voice_mode.set(False)
             self.voice_stop_event.set()
-            if self.voice_thread and self.voice_thread.is_alive():
+            if self.voice_thread:
                 self.voice_thread.join(timeout=1)
-            self.voice_thread = None
+                self.voice_thread = None
             self.voice_button.config(bg="purple", relief=tk.RAISED)
-            self.send_enabled = True
+            self.send_enabled = True  # Reset flags explicitly
             self.start_lock = False
-            self.after(0, self.enable_send_and_start)
+            self.after(0, self.enable_send_and_start)  # Force unlock immediately
             print("Voice assistant mode deactivated.")
         else:
             if self.start_lock or not self.send_enabled or self.is_running:
@@ -1063,124 +1043,36 @@ class InfiniteOracleGUI(tk.Tk):
             print("Voice assistant mode activated. Say 'Oracle' to begin.")
 
     def listen_for_voice(self):
-        import speech_recognition as sr
         recognizer = sr.Recognizer()
         mic = sr.Microphone()
         WAKE_WORD = "oracle"
 
-        print(f"Working directory: {os.getcwd()}")
-
         with mic as source:
-            print("Adjusting for ambient noise, please wait...")
-            recognizer.adjust_for_ambient_noise(source, duration=2)
-            recognizer.energy_threshold = min(200, recognizer.energy_threshold * 0.3)
-            print(f"Ambient noise adjusted. Energy threshold: {recognizer.energy_threshold}")
+            recognizer.adjust_for_ambient_noise(source, duration=1)
             print("Listening for wake word 'Oracle'...")
 
-        audio_buffer = []
-        stop_listening = None
-        wake_detected = threading.Event()
-
-        def audio_callback(recognizer, audio):
-            try:
-                audio_segment = AudioSegment(
-                    data=audio.get_raw_data(),
-                    sample_width=audio.sample_width,
-                    frame_rate=audio.sample_rate,
-                    channels=1
-                )
-                rms = audio_segment.rms
-                print(f"Audio captured: {len(audio.get_raw_data())} bytes, RMS: {rms}")
-
-                if rms > recognizer.energy_threshold:
-                    audio_buffer.append(audio_segment)
-                    while sum(len(seg) for seg in audio_buffer) > 5000:
-                        audio_buffer.pop(0)
-
-                    combined_audio = sum(audio_buffer, AudioSegment.empty())
-                    temp_path = None
-                    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_file:
-                        temp_path = temp_file.name
-                        combined_audio = combined_audio.set_frame_rate(16000)
-                        combined_audio.export(temp_path, format="wav")
-                        print(f"Audio exported to {temp_path}, size: {os.path.getsize(temp_path)} bytes")
-
-                    result = self.whisper_model.transcribe(temp_path, fp16=False)
-                    text = result["text"].lower().strip()
-                    print(f"Whisper transcription: '{text}'")
-
-                    for _ in range(3):
-                        try:
-                            os.remove(temp_path)
-                            print(f"Deleted {temp_path}")
-                            break
-                        except PermissionError:
-                            time.sleep(0.1)
-                            continue
-                    else:
-                        logger.warning(f"Failed to delete {temp_path} after retries")
-
-                    if WAKE_WORD in text:
-                        print("Wake word detected!")
-                        self.play_beep()
-                        audio_buffer.clear()
-                        wake_detected.set()
-
-            except Exception as e:
-                logger.error(f"Voice callback error: {e}")
-
-        stop_listening = recognizer.listen_in_background(mic, audio_callback, phrase_time_limit=5)
-
         while not self.voice_stop_event.is_set():
-            if wake_detected.wait(timeout=0.1):
-                stop_listening(wait_for_stop=True)
-                wake_detected.clear()
-
-                with sr.Microphone() as command_source:
-                    print("Listening for your command...")
-                    command_audio = recognizer.listen(command_source, phrase_time_limit=8)
-                    command_segment = AudioSegment(
-                        data=command_audio.get_raw_data(),
-                        sample_width=command_audio.sample_width,
-                        frame_rate=command_audio.sample_rate,
-                        channels=1
-                    )
-                
-                temp_path = None
-                with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_file:
-                    temp_path = temp_file.name
-                    command_segment = command_segment.set_frame_rate(16000)
-                    command_segment.export(temp_path, format="wav")
-                    print(f"Command audio exported to {temp_path}, size: {os.path.getsize(temp_path)} bytes")
-
-                result = self.whisper_model.transcribe(temp_path, fp16=False)
-                command = result["text"].strip()
-                print(f"Command transcription: '{command}'")
-
-                for _ in range(3):
-                    try:
-                        os.remove(temp_path)
-                        print(f"Deleted {temp_path}")
-                        break
-                    except PermissionError:
-                        time.sleep(0.1)
-                        continue
-                else:
-                    logger.warning(f"Failed to delete {temp_path} after retries")
-
-                if command:
+            try:
+                with mic as source:
+                    audio = recognizer.listen(source, timeout=None, phrase_time_limit=5)
+                text = recognizer.recognize_google(audio).lower()
+                if WAKE_WORD in text:
+                    print("Wake word detected!")
+                    self.play_beep()
+                    with mic as source:
+                        print("Listening for your command...")
+                        audio = recognizer.listen(source, timeout=None, phrase_time_limit=10)
+                    command = recognizer.recognize_google(audio)
                     print(f"Command received: {command}")
                     self.send_voice_command(command)
-                else:
-                    print("No command detected, resuming wake word listening...")
-
-                if not self.voice_stop_event.is_set():
-                    stop_listening = recognizer.listen_in_background(mic, audio_callback, phrase_time_limit=5)
-                    print("Resumed listening for wake word 'Oracle'...")
-
-        if stop_listening:
-            stop_listening(wait_for_stop=False)
-        print("Voice listening stopped.")
+            except sr.UnknownValueError:
+                continue
+            except sr.RequestError as e:
+                logger.error(f"Speech recognition error: {e}")
+                continue
+            except Exception as e:
+                logger.error(f"Voice error: {e}")
+                continue
 
     def play_beep(self):
         try:
@@ -1217,7 +1109,6 @@ class InfiniteOracleGUI(tk.Tk):
                     payload["max_tokens"] = int(self.max_tokens_entry.get())
                     payload["temperature"] = 0.7
 
-                print(f"Sending command to {server_type} server: {command}")
                 response = session.post(server_url, json=payload, timeout=self.timeout_slider.get())
                 response.raise_for_status()
                 data = response.json()
@@ -1227,14 +1118,13 @@ class InfiniteOracleGUI(tk.Tk):
                 )
 
                 if wisdom:
-                    print(f"The Infinite Oracle speaks: {wisdom}")
+                    print(f"The Infinite Oracle speaks: {wisdom}", end="\n\n")
                     with history_lock:
                         if self.remember_var.get():
                             conversation_history.append({"role": "user", "content": command})
                             conversation_history.append({"role": "assistant", "content": wisdom})
                     self.send_wisdom_queue.put(wisdom)
-                else:
-                    print("No wisdom received from server.")
+
             except requests.RequestException as e:
                 logger.error(f"{server_type} connection failed: {str(e)}")
                 print(f"{server_type} error: {str(e)}")
