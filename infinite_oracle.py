@@ -440,7 +440,28 @@ class InfiniteOracleGUI(tk.Tk):
         self.image_spin_speed = 5
         self.animation_running = True
         self.animate_lock = threading.Lock()
-        self.whisper_model = whisper.load_model("base")  # Load Whisper model
+
+        # Load bundled Whisper base model
+        if getattr(sys, 'frozen', False):
+            base_path = sys._MEIPASS
+            model_dir = os.path.join(base_path, "base")
+            logger.debug(f"Loading bundled Whisper model from: {model_dir}")
+            try:
+                # Use the directory path instead of just base.pt
+                self.whisper_model = whisper.load_model(model_dir)
+                logger.debug("Whisper model loaded successfully from bundled directory")
+            except Exception as e:
+                logger.error(f"Failed to load Whisper model from {model_dir}: {str(e)}")
+                raise
+        else:
+            # For non-frozen (development) mode, use the default "base" model
+            logger.debug("Loading Whisper model 'base' from default cache in development mode")
+            try:
+                self.whisper_model = whisper.load_model("base")
+                logger.debug("Whisper model loaded successfully in development mode")
+            except Exception as e:
+                logger.error(f"Failed to load Whisper model in development mode: {str(e)}")
+                raise
 
         try:
             if getattr(sys, 'frozen', False):
