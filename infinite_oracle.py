@@ -20,7 +20,7 @@ from pydub.playback import play
 import random
 from PIL import Image, ImageTk, ImageSequence
 import speech_recognition as sr
-from threading import Event
+from threading import Event, Lock
 
 # Server defaults
 DEFAULT_OLLAMA_URL = "http://localhost:11434/api/chat"
@@ -42,9 +42,10 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 ])
 logger = logging.getLogger("InfiniteOracle")
 
-# Global playback lock and conversation history
+# Global locks and conversation history
 playback_lock = threading.Lock()
 history_lock = threading.Lock()
+mic_lock = Lock()  # New lock for microphone access
 conversation_history = []
 
 class ConsoleRedirector:
@@ -237,7 +238,7 @@ def play_audio(audio_queue, stop_event, get_interval_func, get_variation_func, g
         except queue.Empty:
             time.sleep(0.1)
         except Exception as e:
-            logger.error(f"Playback error: {str(e)}")
+            logger.error(f"Playback error: {str(e)}", exc_info=True)
             if 'wav_path' in locals() and os.path.exists(wav_path):
                 os.remove(wav_path)
             if not gui.voice_mode.get():
@@ -418,7 +419,7 @@ class InfiniteOracleGUI(tk.Tk):
             self.glow_base_frames = self.load_gif_frames(self.glow_path)
             self.glow_frames = [self.load_pre_rotated_frames_from_base(frame, 36) for frame in self.glow_base_frames]
         except Exception as e:
-            logger.error(f"Pre-rendered frames load failed: {e}")
+            logger.error(f"Pre-rendered frames load failed: {e}", exc_info=True)
             self.oracle_frames = [ImageTk.PhotoImage(Image.new("RGBA", (200, 200), (255, 255, 255, 0)))]
             self.glow_frames = [[ImageTk.PhotoImage(Image.new("RGBA", (240, 240), (255, 255, 255, 0)))]]
 
@@ -450,7 +451,7 @@ class InfiniteOracleGUI(tk.Tk):
                 if os.path.exists(wav_path):
                     os.remove(wav_path)
             except Exception as e:
-                logger.error(f"Send audio queue cleanup error: {e}")
+                logger.error(f"Send audio queue cleanup error: {e}", exc_info=True)
 
         self.send_stop_event.clear()
 
@@ -851,7 +852,7 @@ class InfiniteOracleGUI(tk.Tk):
                         if os.path.exists(wav_path):
                             os.remove(wav_path)
                     except Exception as e:
-                        logger.error(f"Audio queue cleanup error: {e}")
+                        logger.error(f"Audio queue cleanup error: {e}", exc_info=True)
 
                 if self.session:
                     self.session.close()
@@ -1036,7 +1037,7 @@ class InfiniteOracleGUI(tk.Tk):
             self.send_enabled = True
             self.start_lock = False
             self.after(0, self.enable_send_and_start)  # Re-enable controls immediately
-            print("Voice assistant mode deactivated.")
+            logger.info("Voice assistant mode deactivated.")
 
         if self.voice_mode.get():
             threading.Thread(target=transition_out_of_voice, daemon=True).start()
@@ -1051,54 +1052,69 @@ class InfiniteOracleGUI(tk.Tk):
             self.voice_stop_event.clear()
             self.voice_thread = threading.Thread(target=self.listen_for_voice, daemon=True)
             self.voice_thread.start()
-            print("Voice assistant mode activated. Say 'Oracle' to begin.")
+            logger.info("Voice assistant mode activated. Say 'Oracle' to begin.")
 
     def listen_for_voice(self):
         recognizer = sr.Recognizer()
         mic = sr.Microphone()
         WAKE_WORD = "oracle"
 
-        with mic as source:
-            recognizer.adjust_for_ambient_noise(source, duration=1)
-            print("Listening for wake word 'Oracle'...")
+        try:
+            with mic_lock:  # Ensure exclusive microphone access
+                with mic as source:
+                    recognizer.adjust_for_ambient_noise(source, duration=1)
+                    logger.info("Adjusted ambient noise. Listening for wake word 'Oracle'...")
+                    print("Listening for wake word 'Oracle'...")
+        except Exception as e:
+            logger.error(f"Microphone initialization failed: {e}", exc_info=True)
+            return
 
         while not self.voice_stop_event.is_set():
-            if self.voice_processing:  # Skip if already processing a command
+            if self.voice_processing:
                 time.sleep(0.1)
                 continue
             try:
-                with mic as source:
-                    audio = recognizer.listen(source, timeout=None, phrase_time_limit=5)
+                with mic_lock:  # Lock microphone during listening
+                    with mic as source:
+                        logger.debug("Listening for wake word...")
+                        audio = recognizer.listen(source, timeout=None, phrase_time_limit=5)
                 text = recognizer.recognize_google(audio).lower()
                 if WAKE_WORD in text and not self.voice_processing:
-                    self.voice_processing = True  # Set flag to prevent re-entry
+                    self.voice_processing = True
+                    logger.info("Wake word 'Oracle' detected!")
                     print("Wake word detected!")
                     self.play_beep()
-                    with mic as source:
-                        print("Listening for your command...")
-                        audio = recognizer.listen(source, timeout=None, phrase_time_limit=10)
+                    with mic_lock:  # Lock microphone for command
+                        with mic as source:
+                            logger.debug("Listening for command...")
+                            print("Listening for your command...")
+                            audio = recognizer.listen(source, timeout=None, phrase_time_limit=10)
                     command = recognizer.recognize_google(audio)
+                    logger.info(f"Command received: {command}")
                     print(f"Command received: {command}")
                     self.send_voice_command(command)
-                    time.sleep(1)  # Small delay to prevent immediate re-detection
-                    self.voice_processing = False  # Reset flag after processing
+                    time.sleep(1)  # Prevent immediate re-detection
+                    self.voice_processing = False
             except sr.UnknownValueError:
+                logger.debug("Unknown value error in speech recognition.")
                 continue
             except sr.RequestError as e:
-                logger.error(f"Speech recognition error: {e}")
-                self.voice_processing = False  # Reset on error
+                logger.error(f"Speech recognition request error: {e}", exc_info=True)
+                self.voice_processing = False
                 continue
             except Exception as e:
-                logger.error(f"Voice error: {e}")
-                self.voice_processing = False  # Reset on error
+                logger.error(f"Voice mode error: {e}", exc_info=True)
+                self.voice_processing = False
                 continue
 
     def play_beep(self):
         try:
-            beep = AudioSegment.from_wav(self.beep_path)
-            play(beep)
+            with playback_lock:  # Ensure exclusive audio playback
+                beep = AudioSegment.from_wav(self.beep_path)
+                logger.debug("Playing beep sound...")
+                play(beep)
         except Exception as e:
-            logger.error(f"Beep playback failed: {e}")
+            logger.error(f"Beep playback failed: {e}", exc_info=True)
 
     def send_voice_command(self, command):
         def voice_thread():
@@ -1110,6 +1126,7 @@ class InfiniteOracleGUI(tk.Tk):
             speaker_id = self.speaker_id_var.get()
 
             if not all([server_url, server_type, model, tts_url, speaker_id]):
+                logger.error("Missing configuration fields for voice command.")
                 print("Error: Missing configuration fields.")
                 return
 
@@ -1128,6 +1145,7 @@ class InfiniteOracleGUI(tk.Tk):
                     payload["max_tokens"] = int(self.max_tokens_entry.get())
                     payload["temperature"] = 0.7
 
+                logger.debug(f"Sending voice command to {server_type} server: {command}")
                 response = session.post(server_url, json=payload, timeout=self.timeout_slider.get())
                 response.raise_for_status()
                 data = response.json()
@@ -1137,6 +1155,7 @@ class InfiniteOracleGUI(tk.Tk):
                 )
 
                 if wisdom:
+                    logger.info(f"Received wisdom: {wisdom}")
                     print(f"The Infinite Oracle speaks: {wisdom}", end="\n\n")
                     with history_lock:
                         if self.remember_var.get():
@@ -1145,7 +1164,7 @@ class InfiniteOracleGUI(tk.Tk):
                     self.send_wisdom_queue.put(wisdom)
 
             except requests.RequestException as e:
-                logger.error(f"{server_type} connection failed: {str(e)}")
+                logger.error(f"{server_type} connection failed: {str(e)}", exc_info=True)
                 print(f"{server_type} error: {str(e)}")
             finally:
                 session.close()
