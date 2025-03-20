@@ -1075,6 +1075,9 @@ class InfiniteOracleGUI(tk.Tk):
                 time.sleep(0.1)
                 continue
 
+            # Print this right before we start listening, ensuring we're ready
+            print("Listening for wake word 'Oracle'...")
+
             try:
                 with mic as source:
                     audio = recognizer.listen(source, timeout=None, phrase_time_limit=5)
@@ -1121,18 +1124,19 @@ class InfiniteOracleGUI(tk.Tk):
                     except queue.Empty:
                         logger.error("TTS timeout waiting for audio response.")
                     
-                    # Sequence complete, reset the flag to listen for wake word again
+                    # Sequence complete, reset the flag after all cleanup
                     processing_sequence = False
-                    print("Listening for wake word 'Oracle'...")
 
             except sr.UnknownValueError:
-                # If speech wasn't understood, reset and continue listening unless in sequence
+                # If speech wasn't understood, continue listening unless in sequence
                 if not processing_sequence:
                     continue
+                processing_sequence = False  # Reset on error during sequence
             except sr.RequestError as e:
                 logger.error(f"Speech recognition error: {e}")
                 if not processing_sequence:
                     continue
+                processing_sequence = False  # Reset on error during sequence
             except Exception as e:
                 logger.error(f"Voice error: {e}")
                 if processing_sequence:
