@@ -403,6 +403,7 @@ class InfiniteOracleGUI(tk.Tk):
         self.voice_mode = tk.BooleanVar(value=False)
         self.voice_stop_event = Event()
         self.voice_thread = None
+        self.voice_processing = False  # Flag to prevent multiple wake word triggers
 
         try:
             if getattr(sys, 'frozen', False):
@@ -1038,7 +1039,6 @@ class InfiniteOracleGUI(tk.Tk):
             print("Voice assistant mode deactivated.")
 
         if self.voice_mode.get():
-            # Exiting Voice mode in a separate thread to avoid blocking the main thread
             threading.Thread(target=transition_out_of_voice, daemon=True).start()
         else:
             if self.start_lock or not self.send_enabled or self.is_running:
@@ -1063,11 +1063,15 @@ class InfiniteOracleGUI(tk.Tk):
             print("Listening for wake word 'Oracle'...")
 
         while not self.voice_stop_event.is_set():
+            if self.voice_processing:  # Skip if already processing a command
+                time.sleep(0.1)
+                continue
             try:
                 with mic as source:
                     audio = recognizer.listen(source, timeout=None, phrase_time_limit=5)
                 text = recognizer.recognize_google(audio).lower()
-                if WAKE_WORD in text:
+                if WAKE_WORD in text and not self.voice_processing:
+                    self.voice_processing = True  # Set flag to prevent re-entry
                     print("Wake word detected!")
                     self.play_beep()
                     with mic as source:
@@ -1076,13 +1080,17 @@ class InfiniteOracleGUI(tk.Tk):
                     command = recognizer.recognize_google(audio)
                     print(f"Command received: {command}")
                     self.send_voice_command(command)
+                    time.sleep(1)  # Small delay to prevent immediate re-detection
+                    self.voice_processing = False  # Reset flag after processing
             except sr.UnknownValueError:
                 continue
             except sr.RequestError as e:
                 logger.error(f"Speech recognition error: {e}")
+                self.voice_processing = False  # Reset on error
                 continue
             except Exception as e:
                 logger.error(f"Voice error: {e}")
+                self.voice_processing = False  # Reset on error
                 continue
 
     def play_beep(self):
