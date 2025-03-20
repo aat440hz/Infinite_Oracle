@@ -19,6 +19,8 @@ from pydub.effects import normalize
 from pydub.playback import play
 import random
 from PIL import Image, ImageTk, ImageSequence
+import speech_recognition as sr
+from threading import Event
 
 # Server defaults
 DEFAULT_OLLAMA_URL = "http://localhost:11434/api/chat"
@@ -215,7 +217,9 @@ def play_audio(audio_queue, stop_event, get_interval_func, get_variation_func, g
 
                     audio = normalize(audio)
                     gui.start_spinning(len(audio) / 1000.0)
-                    play(audio)
+                    gui.playback_active.set()  # Signal playback is starting
+                    play(audio)  # Play the audio
+                    gui.playback_active.clear()  # Signal playback is finished
                     gui.stop_spinning()
 
                     if gui.record_var.get():
@@ -238,9 +242,10 @@ def play_audio(audio_queue, stop_event, get_interval_func, get_variation_func, g
             logger.error(f"Playback error: {str(e)}")
             if 'wav_path' in locals() and os.path.exists(wav_path):
                 os.remove(wav_path)
-            gui.send_enabled = True
-            gui.start_lock = False
-            gui.after(0, gui.enable_send_and_start)
+            if not gui.voice_mode.get():
+                gui.send_enabled = True
+                gui.start_lock = False
+                gui.after(0, gui.enable_send_and_start)
 
 def load_config():
     defaults = {
@@ -396,6 +401,12 @@ class InfiniteOracleGUI(tk.Tk):
         self.image_spin_speed = 5
         self.animation_running = True
         self.animate_lock = threading.Lock()
+        # Voice assistant variables
+        self.voice_mode = tk.BooleanVar(value=False)
+        self.voice_stop_event = Event()
+        self.voice_thread = None
+        self.playback_active = threading.Event()  # Event to indicate playback is active
+        self.playback_active.clear()  # Initially, no playback
 
         try:
             if getattr(sys, 'frozen', False):
@@ -404,6 +415,7 @@ class InfiniteOracleGUI(tk.Tk):
                 base_path = os.path.dirname(os.path.abspath(__file__))
             self.image_path = os.path.join(base_path, "oracle.png")
             self.glow_path = os.path.join(base_path, "glow.gif")
+            self.beep_path = os.path.join(base_path, "beep.wav")
             
             self.oracle_frames = self.load_pre_rotated_frames(self.image_path, 36)
             self.glow_base_frames = self.load_gif_frames(self.glow_path)
@@ -421,8 +433,10 @@ class InfiniteOracleGUI(tk.Tk):
         self.server_type_var.trace("w", lambda *args: self.update_from_config())
 
         self.start_tts_threads()
-        self.animation_thread = threading.Thread(target=self.run_animations, daemon=True)
+        self.animation_thread = threading.Thread(target=self.run_animations, daemon=True, name="AnimationThread")
         self.animation_thread.start()
+        
+        self.protocol("WM_DELETE_WINDOW", self.on_closing)
 
     def start_tts_threads(self):
         if self.send_tts_thread and self.send_tts_thread.is_alive():
@@ -490,16 +504,15 @@ class InfiniteOracleGUI(tk.Tk):
     def run_animations(self):
         while self.animation_running:
             with self.animate_lock:
-                if self.glow_frames:
+                if self.glow_frames and len(self.glow_frames) > 0:
                     self.glow_frame_index = (self.glow_frame_index + 1) % len(self.glow_frames)
-                    glow_rotation_index = (len(self.glow_frames[self.glow_frame_index]) - 1 - (self.oracle_frame_index % len(self.glow_frames[self.glow_frame_index])))
+                    glow_rotation_index = (len(self.glow_frames[self.glow_frame_index]) - 1 - 
+                                        (self.oracle_frame_index % len(self.glow_frames[self.glow_frame_index])))
                     self.image_canvas.itemconfig(self.glow_item, image=self.glow_frames[self.glow_frame_index][glow_rotation_index])
 
                 if self.is_audio_playing:
                     self.oracle_frame_index = (self.oracle_frame_index + 1) % len(self.oracle_frames)
                     self.image_canvas.itemconfig(self.oracle_item, image=self.oracle_frames[self.oracle_frame_index])
-                    glow_rotation_index = (len(self.glow_frames[self.glow_frame_index]) - 1 - (self.oracle_frame_index % len(self.glow_frames[self.glow_frame_index])))
-                    self.image_canvas.itemconfig(self.glow_item, image=self.glow_frames[self.glow_frame_index][glow_rotation_index])
             time.sleep(0.05)
 
     def start_spinning(self, duration_seconds):
@@ -507,6 +520,13 @@ class InfiniteOracleGUI(tk.Tk):
 
     def stop_spinning(self):
         self.is_audio_playing = False
+
+    def cleanup_animation(self):
+        with self.animate_lock:
+            self.animation_running = False
+        if self.animation_thread and self.animation_thread.is_alive():
+            self.animation_thread.join(timeout=1)
+        self.animation_thread = None
 
     def update_from_config(self):
         self.config = load_config()
@@ -684,6 +704,8 @@ class InfiniteOracleGUI(tk.Tk):
         self.remember_check.pack(side=tk.LEFT, padx=5)
         self.record_button = tk.Button(button_frame, text="Record", command=self.toggle_record, bg="red", fg="white")
         self.record_button.pack(side=tk.LEFT, padx=5)
+        self.voice_button = tk.Button(button_frame, text="Voice", command=self.toggle_voice_mode, bg="purple", fg="white")
+        self.voice_button.pack(side=tk.LEFT, padx=5)
 
         console_frame = tk.Frame(right_frame, bg="#2b2b2b")
         console_frame.grid(row=3, column=0, sticky="nsew")
@@ -712,15 +734,19 @@ class InfiniteOracleGUI(tk.Tk):
         self.timeout_slider.config(state=tk.DISABLED)
         self.retries_slider.config(state=tk.DISABLED)
         self.max_tokens_entry.config(state=tk.DISABLED, bg="grey")
+        self.voice_button.config(state=tk.NORMAL if self.voice_mode.get() else tk.DISABLED)
 
     def enable_send_and_start(self):
-        if not self.is_running and not self.start_lock:
-            self.send_button.config(state=tk.NORMAL)
+        if not self.is_running:
+            self.send_enabled = True
+            self.start_lock = False
             self.start_button.config(state=tk.NORMAL)
+            self.send_button.config(state=tk.NORMAL)
             self.save_button.config(state=tk.NORMAL)
             self.clear_button.config(state=tk.NORMAL if self.remember_var.get() else tk.DISABLED)
             self.remember_check.config(state=tk.NORMAL)
             self.record_button.config(state=tk.NORMAL)
+            self.voice_button.config(state=tk.NORMAL)
             self.server_type_menu.config(state=tk.NORMAL)
             self.server_url_entry.config(state=tk.NORMAL)
             self.model_entry.config(state=tk.NORMAL)
@@ -736,10 +762,9 @@ class InfiniteOracleGUI(tk.Tk):
             self.retries_slider.config(state=tk.NORMAL)
             server_type = self.server_type_var.get()
             self.max_tokens_entry.config(state=tk.NORMAL if server_type != "Ollama" else tk.DISABLED, bg="white" if server_type != "Ollama" else "grey")
-            self.send_enabled = True
 
     def save_config_action(self):
-        if not self.start_lock and self.send_enabled:
+        if not self.start_lock and self.send_enabled and not self.voice_mode.get():
             self.disable_controls()
             self.after(100, lambda: save_config(self))
             self.after(150, self.enable_send_and_start)
@@ -749,7 +774,7 @@ class InfiniteOracleGUI(tk.Tk):
 
     def start_oracle(self):
         def start_thread():
-            if self.start_lock or self.is_running:
+            if self.start_lock or self.is_running or self.voice_mode.get():
                 return
             self.start_lock = True
             self.disable_controls()
@@ -844,6 +869,7 @@ class InfiniteOracleGUI(tk.Tk):
                 self.clear_button.config(state=tk.NORMAL if self.remember_var.get() else tk.DISABLED)
                 self.remember_check.config(state=tk.NORMAL)
                 self.record_button.config(state=tk.NORMAL)
+                self.voice_button.config(state=tk.NORMAL)
                 self.server_type_menu.config(state=tk.NORMAL)
                 self.server_url_entry.config(state=tk.NORMAL)
                 self.model_entry.config(state=tk.NORMAL)
@@ -865,10 +891,10 @@ class InfiniteOracleGUI(tk.Tk):
 
     def send_prompt_action(self):
         def send_thread():
-            if not self.send_enabled or self.start_lock:
+            if not self.send_enabled or self.start_lock or self.voice_mode.get():
                 return
             self.send_enabled = False
-            self.start_lock = True  # Lock Start button until playback begins
+            self.start_lock = True
             self.disable_controls()
 
             server_url = self.server_url_var.get()
@@ -974,7 +1000,7 @@ class InfiniteOracleGUI(tk.Tk):
         self.after(100, check_playback)
 
     def clear_history(self):
-        if self.start_lock or not self.send_enabled:
+        if self.start_lock or not self.send_enabled or self.voice_mode.get():
             return
         with history_lock:
             global conversation_history
@@ -1001,6 +1027,140 @@ class InfiniteOracleGUI(tk.Tk):
             self.record_var.set(True)
             self.record_button.config(bg="#ff4040", relief=tk.SUNKEN)
             print("The Infinite Oracle’s wisdom will now be preserved.")
+
+    def toggle_voice_mode(self):
+        def transition_out_of_voice():
+            self.voice_stop_event.set()  # Signal voice thread to stop
+            if self.voice_thread and self.voice_thread.is_alive():
+                self.voice_thread.join(timeout=1)  # Wait for voice thread to finish
+            self.voice_thread = None
+            self.voice_mode.set(False)
+            self.voice_button.config(bg="purple", relief=tk.RAISED)
+            self.send_enabled = True
+            self.start_lock = False
+            self.after(0, self.enable_send_and_start)  # Re-enable controls immediately
+            print("Voice assistant mode deactivated.")
+
+        if self.voice_mode.get():
+            # Exiting Voice mode in a separate thread to avoid blocking the main thread
+            threading.Thread(target=transition_out_of_voice, daemon=True).start()
+        else:
+            if self.start_lock or not self.send_enabled or self.is_running:
+                return
+            self.voice_mode.set(True)
+            self.send_enabled = False
+            self.start_lock = True
+            self.disable_controls()
+            self.voice_button.config(bg="#ff00ff", relief=tk.SUNKEN)
+            self.voice_stop_event.clear()
+            self.voice_thread = threading.Thread(target=self.listen_for_voice, daemon=True)
+            self.voice_thread.start()
+            print("Voice assistant mode activated. Say 'Oracle' to begin.")
+
+    def listen_for_voice(self):
+        recognizer = sr.Recognizer()
+        mic = sr.Microphone()
+        WAKE_WORD = "oracle"
+
+        with mic as source:
+            recognizer.adjust_for_ambient_noise(source, duration=1)
+            print("Listening for wake word 'Oracle'...")
+
+        while not self.voice_stop_event.is_set():
+            if self.playback_active.is_set():  # Skip listening during playback
+                time.sleep(0.1)  # Brief sleep to avoid busy-waiting
+                continue
+            try:
+                with mic as source:
+                    audio = recognizer.listen(source, timeout=None, phrase_time_limit=5)
+                text = recognizer.recognize_google(audio).lower()
+                if WAKE_WORD in text:
+                    print("Wake word detected!")
+                    self.play_beep()
+                    with mic as source:
+                        print("Listening for your command...")
+                        while self.playback_active.is_set():  # Wait if beep is still playing
+                            time.sleep(0.1)
+                        audio = recognizer.listen(source, timeout=None, phrase_time_limit=10)
+                    command = recognizer.recognize_google(audio)
+                    print(f"Command received: {command}")
+                    self.send_voice_command(command)
+            except sr.UnknownValueError:
+                continue
+            except sr.RequestError as e:
+                logger.error(f"Speech recognition error: {e}")
+                continue
+            except Exception as e:
+                logger.error(f"Voice error: {e}")
+                continue
+
+    def play_beep(self):
+        try:
+            beep = AudioSegment.from_wav(self.beep_path)
+            self.playback_active.set()  # Signal playback is starting
+            play(beep)
+            self.playback_active.clear()  # Signal playback is finished
+        except Exception as e:
+            logger.error(f"Beep playback failed: {e}")
+
+    def send_voice_command(self, command):
+        def voice_thread():
+            global conversation_history
+            server_url = self.server_url_var.get()
+            server_type = self.server_type_var.get()
+            model = self.model_var.get()
+            tts_url = self.tts_url_var.get()
+            speaker_id = self.speaker_id_var.get()
+
+            if not all([server_url, server_type, model, tts_url, speaker_id]):
+                print("Error: Missing configuration fields.")
+                return
+
+            session = setup_session(server_url, self.retries_slider.get())
+            try:
+                with history_lock:
+                    if not self.remember_var.get():
+                        conversation_history = []
+                    messages = [{"role": "system", "content": SYSTEM_PROMPT}] + conversation_history + [{"role": "user", "content": command}]
+                payload = {
+                    "model": model,
+                    "messages": messages,
+                    "stream": False
+                }
+                if server_type != "Ollama":
+                    payload["max_tokens"] = int(self.max_tokens_entry.get())
+                    payload["temperature"] = 0.7
+
+                response = session.post(server_url, json=payload, timeout=self.timeout_slider.get())
+                response.raise_for_status()
+                data = response.json()
+                wisdom = (
+                    data.get("message", {}).get("content", "").strip() if server_type == "Ollama"
+                    else data.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+                )
+
+                if wisdom:
+                    print(f"The Infinite Oracle speaks: {wisdom}", end="\n\n")
+                    with history_lock:
+                        if self.remember_var.get():
+                            conversation_history.append({"role": "user", "content": command})
+                            conversation_history.append({"role": "assistant", "content": wisdom})
+                    self.send_wisdom_queue.put(wisdom)
+
+            except requests.RequestException as e:
+                logger.error(f"{server_type} connection failed: {str(e)}")
+                print(f"{server_type} error: {str(e)}")
+            finally:
+                session.close()
+
+        threading.Thread(target=voice_thread, daemon=True).start()
+
+    def on_closing(self):
+        self.stop_oracle()
+        self.send_stop_event.set()
+        self.voice_stop_event.set()
+        self.cleanup_animation()
+        self.destroy()
 
 def main():
     app = InfiniteOracleGUI()
