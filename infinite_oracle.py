@@ -1061,37 +1061,82 @@ class InfiniteOracleGUI(tk.Tk):
         recognizer = sr.Recognizer()
         mic = sr.Microphone()
         WAKE_WORD = "oracle"
+        
+        # State flag to prevent overlapping wake word detections
+        processing_sequence = False
 
         with mic as source:
             recognizer.adjust_for_ambient_noise(source, duration=1)
             print("Listening for wake word 'Oracle'...")
 
         while not self.voice_stop_event.is_set():
-            if self.playback_active.is_set():  # Skip listening during playback
-                time.sleep(0.1)  # Brief sleep to avoid busy-waiting
+            if processing_sequence or self.playback_active.is_set():
+                # Skip listening if we're in the middle of a sequence or playback is active
+                time.sleep(0.1)
                 continue
+
             try:
                 with mic as source:
                     audio = recognizer.listen(source, timeout=None, phrase_time_limit=5)
                 text = recognizer.recognize_google(audio).lower()
-                if WAKE_WORD in text:
+                
+                if WAKE_WORD in text and not processing_sequence:
+                    # Set the flag to indicate we're processing a sequence
+                    processing_sequence = True
                     print("Wake word detected!")
                     self.play_beep()
+
+                    # Wait for beep to finish before listening for command
+                    while self.playback_active.is_set():
+                        time.sleep(0.1)
+
+                    # Listen for the command
                     with mic as source:
                         print("Listening for your command...")
-                        while self.playback_active.is_set():  # Wait if beep is still playing
-                            time.sleep(0.1)
                         audio = recognizer.listen(source, timeout=None, phrase_time_limit=10)
                     command = recognizer.recognize_google(audio)
                     print(f"Command received: {command}")
+
+                    # Process the command and wait for TTS playback
                     self.send_voice_command(command)
+
+                    # Wait for the TTS audio to be generated and played
+                    try:
+                        wisdom, wav_path, pitch = self.send_audio_queue.get(timeout=15)  # Adjust timeout as needed
+                        if os.path.exists(wav_path) and os.path.getsize(wav_path) > 0:
+                            # Load the WAV file to get its duration
+                            audio_segment = AudioSegment.from_wav(wav_path)
+                            duration_seconds = len(audio_segment) / 1000.0  # Duration in seconds
+                            logger.info(f"TTS audio duration: {duration_seconds} seconds")
+                            
+                            # Wait for playback to start and then for the full duration
+                            while not self.playback_active.is_set():  # Wait until playback begins
+                                time.sleep(0.1)
+                            time.sleep(duration_seconds + 0.5)  # Wait for duration plus a small buffer
+                            os.remove(wav_path)
+                        else:
+                            logger.error("TTS produced no valid audio.")
+                            os.remove(wav_path)
+                        self.send_audio_queue.task_done()
+                    except queue.Empty:
+                        logger.error("TTS timeout waiting for audio response.")
+                    
+                    # Sequence complete, reset the flag to listen for wake word again
+                    processing_sequence = False
+                    print("Listening for wake word 'Oracle'...")
+
             except sr.UnknownValueError:
-                continue
+                # If speech wasn't understood, reset and continue listening unless in sequence
+                if not processing_sequence:
+                    continue
             except sr.RequestError as e:
                 logger.error(f"Speech recognition error: {e}")
-                continue
+                if not processing_sequence:
+                    continue
             except Exception as e:
                 logger.error(f"Voice error: {e}")
+                if processing_sequence:
+                    processing_sequence = False  # Reset on error to avoid deadlock
                 continue
 
     def play_beep(self):
