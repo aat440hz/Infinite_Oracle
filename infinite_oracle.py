@@ -240,7 +240,6 @@ def play_audio(audio_queue, stop_event, get_interval_func, get_variation_func, g
             logger.error(f"Playback error: {str(e)}")
             if 'wav_path' in locals() and os.path.exists(wav_path):
                 os.remove(wav_path)
-            # Ensure GUI unlocks even if playback fails in voice mode
             if not gui.voice_mode.get():
                 gui.send_enabled = True
                 gui.start_lock = False
@@ -412,7 +411,7 @@ class InfiniteOracleGUI(tk.Tk):
                 base_path = os.path.dirname(os.path.abspath(__file__))
             self.image_path = os.path.join(base_path, "oracle.png")
             self.glow_path = os.path.join(base_path, "glow.gif")
-            self.beep_path = os.path.join(base_path, "beep.wav")  # Add beep sound file
+            self.beep_path = os.path.join(base_path, "beep.wav")
             
             self.oracle_frames = self.load_pre_rotated_frames(self.image_path, 36)
             self.glow_base_frames = self.load_gif_frames(self.glow_path)
@@ -430,8 +429,10 @@ class InfiniteOracleGUI(tk.Tk):
         self.server_type_var.trace("w", lambda *args: self.update_from_config())
 
         self.start_tts_threads()
-        self.animation_thread = threading.Thread(target=self.run_animations, daemon=True)
+        self.animation_thread = threading.Thread(target=self.run_animations, daemon=True, name="AnimationThread")
         self.animation_thread.start()
+        
+        self.protocol("WM_DELETE_WINDOW", self.on_closing)
 
     def start_tts_threads(self):
         if self.send_tts_thread and self.send_tts_thread.is_alive():
@@ -499,16 +500,15 @@ class InfiniteOracleGUI(tk.Tk):
     def run_animations(self):
         while self.animation_running:
             with self.animate_lock:
-                if self.glow_frames:
+                if self.glow_frames and len(self.glow_frames) > 0:
                     self.glow_frame_index = (self.glow_frame_index + 1) % len(self.glow_frames)
-                    glow_rotation_index = (len(self.glow_frames[self.glow_frame_index]) - 1 - (self.oracle_frame_index % len(self.glow_frames[self.glow_frame_index])))
+                    glow_rotation_index = (len(self.glow_frames[self.glow_frame_index]) - 1 - 
+                                        (self.oracle_frame_index % len(self.glow_frames[self.glow_frame_index])))
                     self.image_canvas.itemconfig(self.glow_item, image=self.glow_frames[self.glow_frame_index][glow_rotation_index])
 
                 if self.is_audio_playing:
                     self.oracle_frame_index = (self.oracle_frame_index + 1) % len(self.oracle_frames)
                     self.image_canvas.itemconfig(self.oracle_item, image=self.oracle_frames[self.oracle_frame_index])
-                    glow_rotation_index = (len(self.glow_frames[self.glow_frame_index]) - 1 - (self.oracle_frame_index % len(self.glow_frames[self.glow_frame_index])))
-                    self.image_canvas.itemconfig(self.glow_item, image=self.glow_frames[self.glow_frame_index][glow_rotation_index])
             time.sleep(0.05)
 
     def start_spinning(self, duration_seconds):
@@ -516,6 +516,13 @@ class InfiniteOracleGUI(tk.Tk):
 
     def stop_spinning(self):
         self.is_audio_playing = False
+
+    def cleanup_animation(self):
+        with self.animate_lock:
+            self.animation_running = False
+        if self.animation_thread and self.animation_thread.is_alive():
+            self.animation_thread.join(timeout=1)
+        self.animation_thread = None
 
     def update_from_config(self):
         self.config = load_config()
@@ -1018,17 +1025,21 @@ class InfiniteOracleGUI(tk.Tk):
             print("The Infinite Oracle’s wisdom will now be preserved.")
 
     def toggle_voice_mode(self):
-        if self.voice_mode.get():
+        def transition_out_of_voice():
+            self.voice_stop_event.set()  # Signal voice thread to stop
+            if self.voice_thread and self.voice_thread.is_alive():
+                self.voice_thread.join(timeout=1)  # Wait for voice thread to finish
+            self.voice_thread = None
             self.voice_mode.set(False)
-            self.voice_stop_event.set()
-            if self.voice_thread:
-                self.voice_thread.join(timeout=1)
-                self.voice_thread = None
             self.voice_button.config(bg="purple", relief=tk.RAISED)
-            self.send_enabled = True  # Reset flags explicitly
+            self.send_enabled = True
             self.start_lock = False
-            self.after(0, self.enable_send_and_start)  # Force unlock immediately
+            self.after(0, self.enable_send_and_start)  # Re-enable controls immediately
             print("Voice assistant mode deactivated.")
+
+        if self.voice_mode.get():
+            # Exiting Voice mode in a separate thread to avoid blocking the main thread
+            threading.Thread(target=transition_out_of_voice, daemon=True).start()
         else:
             if self.start_lock or not self.send_enabled or self.is_running:
                 return
@@ -1132,6 +1143,13 @@ class InfiniteOracleGUI(tk.Tk):
                 session.close()
 
         threading.Thread(target=voice_thread, daemon=True).start()
+
+    def on_closing(self):
+        self.stop_oracle()
+        self.send_stop_event.set()
+        self.voice_stop_event.set()
+        self.cleanup_animation()
+        self.destroy()
 
 def main():
     app = InfiniteOracleGUI()
