@@ -19,6 +19,9 @@ from pydub.effects import normalize
 from pydub.playback import play
 import random
 from PIL import Image, ImageTk, ImageSequence
+import pyaudio
+import wave
+import whisper
 
 # Server defaults
 DEFAULT_OLLAMA_URL = "http://localhost:11434/api/chat"
@@ -34,8 +37,8 @@ CONFIG_FILE = "oracle_config.json"
 # System prompt
 SYSTEM_PROMPT = """You are the Infinite Oracle, a mystical being of boundless wisdom. Speak in an uplifting, cryptic, and metaphysical tone, offering motivational insights that inspire awe and contemplation. Provide a concise paragraph of 2-3 sentences."""
 
-# Setup logging
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s", handlers=[
+# Setup logging with DEBUG level
+logging.basicConfig(level=logging.DEBUG, format="%(asctime)s - %(levelname)s - %(message)s", handlers=[
     logging.StreamHandler(sys.stdout)
 ])
 logger = logging.getLogger("InfiniteOracle")
@@ -136,7 +139,9 @@ def generate_wisdom(gui, wisdom_queue, model, get_server_type_func, stop_event, 
 def text_to_speech(wisdom_queue, audio_queue, get_speaker_id_func, pitch_func, stop_event, get_tts_url_func):
     while not stop_event.is_set():
         try:
+            logger.debug("Waiting for wisdom in TTS thread")
             wisdom = wisdom_queue.get(timeout=5)
+            logger.debug("Received wisdom: %s", wisdom)
             temp_wav_file = tempfile.NamedTemporaryFile(delete=False, suffix='.wav')
             temp_wav_path = temp_wav_file.name
             temp_wav_file.close()
@@ -150,6 +155,7 @@ def text_to_speech(wisdom_queue, audio_queue, get_speaker_id_func, pitch_func, s
                 tts_url,
                 '--output', temp_wav_path
             ]
+            logger.debug("Executing TTS command: %s", " ".join(curl_command))
             try:
                 subprocess.run(
                     curl_command,
@@ -158,6 +164,7 @@ def text_to_speech(wisdom_queue, audio_queue, get_speaker_id_func, pitch_func, s
                     text=True,
                     creationflags=subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0
                 )
+                logger.debug("TTS command executed successfully")
             except subprocess.CalledProcessError as e:
                 logger.error(f"TTS failed: {e.stderr}")
                 os.remove(temp_wav_path)
@@ -165,12 +172,14 @@ def text_to_speech(wisdom_queue, audio_queue, get_speaker_id_func, pitch_func, s
                 continue
 
             if os.path.exists(temp_wav_path) and os.path.getsize(temp_wav_path) > 0 and not stop_event.is_set():
+                logger.debug("TTS audio file created: %s", temp_wav_path)
                 audio_queue.put((wisdom, temp_wav_path, pitch_func()))
             else:
                 logger.error(f"TTS produced no valid audio for '{wisdom[:50]}...'")
                 os.remove(temp_wav_path)
             wisdom_queue.task_done()
         except queue.Empty:
+            logger.debug("TTS queue empty, waiting...")
             continue
         except Exception as e:
             logger.error(f"TTS error: {str(e)}")
@@ -196,7 +205,9 @@ def play_audio(audio_queue, stop_event, get_interval_func, get_variation_func, g
         AudioSegment.converter = ffmpeg_path
     while not stop_event.is_set():
         try:
+            logger.debug("Waiting for audio in playback thread")
             wisdom, wav_path, pitch = audio_queue.get()
+            logger.debug("Received audio: %s", wav_path)
             with playback_lock:
                 if not stop_event.is_set():
                     audio = AudioSegment.from_wav(wav_path)
@@ -241,6 +252,39 @@ def play_audio(audio_queue, stop_event, get_interval_func, get_variation_func, g
             gui.send_enabled = True
             gui.start_lock = False
             gui.after(0, gui.enable_send_and_start)
+
+def capture_audio(duration=5, filename=None):
+    CHUNK = 1024
+    FORMAT = pyaudio.paInt16
+    CHANNELS = 1
+    RATE = 16000  # Whisper works well with 16kHz
+
+    if filename is None:
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        filename = os.path.join(script_dir, "temp_audio.wav")
+
+    p = pyaudio.PyAudio()
+    stream = p.open(format=FORMAT, channels=CHANNELS, rate=RATE, input=True, frames_per_buffer=CHUNK)
+    
+    print("Listening...")
+    frames = []
+    for _ in range(0, int(RATE / CHUNK * duration)):
+        data = stream.read(CHUNK)
+        frames.append(data)
+    
+    print("Done listening.")
+    stream.stop_stream()
+    stream.close()
+    p.terminate()
+
+    wf = wave.open(filename, 'wb')
+    wf.setnchannels(CHANNELS)
+    wf.setsampwidth(p.get_sample_size(FORMAT))
+    wf.setframerate(RATE)
+    wf.writeframes(b''.join(frames))
+    wf.close()
+    
+    return filename
 
 def load_config():
     defaults = {
@@ -396,6 +440,7 @@ class InfiniteOracleGUI(tk.Tk):
         self.image_spin_speed = 5
         self.animation_running = True
         self.animate_lock = threading.Lock()
+        self.whisper_model = whisper.load_model("base")  # Load Whisper model
 
         try:
             if getattr(sys, 'frozen', False):
@@ -548,6 +593,13 @@ class InfiniteOracleGUI(tk.Tk):
                 self.image_canvas.coords(self.glow_item, canvas_size // 2, canvas_size // 2)
                 self.image_canvas.coords(self.oracle_item, canvas_size // 2, canvas_size // 2)
 
+    def transcribe_audio(self, audio_path):
+        result = self.whisper_model.transcribe(audio_path)
+        text = result["text"].strip()
+        logger.debug("Transcribed text: %s", text)
+        print(f"Transcribed: {text}")
+        return text
+
     def create_widgets(self):
         self.configure(bg="#2b2b2b")
 
@@ -589,6 +641,9 @@ class InfiniteOracleGUI(tk.Tk):
         self.system_prompt_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
         self.send_button = tk.Button(prompt_frame, text="Send", command=self.send_prompt_action)
         self.send_button.pack(side=tk.RIGHT, padx=5)
+
+        self.listen_button = tk.Button(self.left_frame, text="Listen", command=self.start_listening)
+        self.listen_button.pack(pady=5)
 
         effects_frame = tk.LabelFrame(self.left_frame, text="Effects", bg="#2b2b2b", fg="white", padx=5, pady=5)
         effects_frame.pack(pady=5, fill=tk.X)
@@ -694,6 +749,7 @@ class InfiniteOracleGUI(tk.Tk):
     def disable_controls(self):
         self.start_button.config(state=tk.DISABLED)
         self.send_button.config(state=tk.DISABLED)
+        self.listen_button.config(state=tk.DISABLED)
         self.save_button.config(state=tk.DISABLED)
         self.clear_button.config(state=tk.DISABLED)
         self.remember_check.config(state=tk.DISABLED)
@@ -717,6 +773,7 @@ class InfiniteOracleGUI(tk.Tk):
         if not self.is_running and not self.start_lock:
             self.send_button.config(state=tk.NORMAL)
             self.start_button.config(state=tk.NORMAL)
+            self.listen_button.config(state=tk.NORMAL)
             self.save_button.config(state=tk.NORMAL)
             self.clear_button.config(state=tk.NORMAL if self.remember_var.get() else tk.DISABLED)
             self.remember_check.config(state=tk.NORMAL)
@@ -840,6 +897,7 @@ class InfiniteOracleGUI(tk.Tk):
 
                 self.start_button.config(state=tk.NORMAL)
                 self.send_button.config(state=tk.NORMAL)
+                self.listen_button.config(state=tk.NORMAL)
                 self.save_button.config(state=tk.NORMAL)
                 self.clear_button.config(state=tk.NORMAL if self.remember_var.get() else tk.DISABLED)
                 self.remember_check.config(state=tk.NORMAL)
@@ -866,10 +924,12 @@ class InfiniteOracleGUI(tk.Tk):
     def send_prompt_action(self):
         def send_thread():
             if not self.send_enabled or self.start_lock:
+                logger.debug("Send blocked: send_enabled=%s, start_lock=%s", self.send_enabled, self.start_lock)
                 return
             self.send_enabled = False
-            self.start_lock = True  # Lock Start button until playback begins
+            self.start_lock = True
             self.disable_controls()
+            logger.debug("Starting send_prompt_action")
 
             server_url = self.server_url_var.get()
             server_type = self.server_type_var.get()
@@ -879,6 +939,8 @@ class InfiniteOracleGUI(tk.Tk):
             speaker_id = self.speaker_id_var.get()
 
             if not all([server_url, server_type, model, prompt, tts_url, speaker_id]):
+                logger.warning("Missing fields: server_url=%s, server_type=%s, model=%s, prompt=%s, tts_url=%s, speaker_id=%s",
+                               server_url, server_type, model, prompt, tts_url, speaker_id)
                 messagebox.showwarning("Input Error", "Please fill all fields.")
                 self.send_enabled = True
                 self.start_lock = False
@@ -886,10 +948,12 @@ class InfiniteOracleGUI(tk.Tk):
                 return
 
             self.reset_tts_threads()
+            logger.debug("TTS threads reset")
 
             send_session = setup_session(server_url, self.retries_slider.get())
             success, error_msg = self.verify_server(server_url, server_type, model)
             if not success:
+                logger.error("Server verification failed: %s", error_msg)
                 print(error_msg)
                 send_session.close()
                 self.send_enabled = True
@@ -897,6 +961,7 @@ class InfiniteOracleGUI(tk.Tk):
                 self.after(0, self.enable_send_and_start)
                 return
 
+            logger.debug("Sending prompt to server: %s", prompt)
             send_thread = threading.Thread(
                 target=self.send_prompt_with_tts_tracking,
                 args=(send_session, self.send_wisdom_queue, model, server_type, prompt, self.send_audio_queue),
@@ -922,6 +987,7 @@ class InfiniteOracleGUI(tk.Tk):
                 payload["max_tokens"] = int(self.max_tokens_entry.get())
                 payload["temperature"] = 0.7
 
+            logger.debug("Sending request to %s with payload: %s", self.server_url_var.get(), json.dumps(payload))
             response = session.post(self.server_url_var.get(), json=payload, timeout=self.timeout_slider.get())
             response.raise_for_status()
             data = response.json()
@@ -929,6 +995,7 @@ class InfiniteOracleGUI(tk.Tk):
                 data.get("message", {}).get("content", "").strip() if server_type == "Ollama"
                 else data.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
             )
+            logger.debug("Received response: %s", wisdom)
 
             if wisdom:
                 print(f"The Infinite Oracle speaks: {wisdom}", end="\n\n")
@@ -936,20 +1003,23 @@ class InfiniteOracleGUI(tk.Tk):
                     if self.remember_var.get():
                         conversation_history.append({"role": "user", "content": prompt})
                         conversation_history.append({"role": "assistant", "content": wisdom})
+                logger.debug("Queueing wisdom: %s", wisdom)
                 wisdom_queue.put(wisdom)
 
                 try:
-                    wisdom, wav_path, pitch = audio_queue.get(timeout=10)
+                    logger.debug("Waiting for TTS audio")
+                    wisdom, wav_path, pitch = audio_queue.get(timeout=15)
+                    logger.debug("Received TTS audio: %s", wav_path)
                     if os.path.exists(wav_path) and os.path.getsize(wav_path) > 0:
                         self.after(0, lambda: self.wait_for_playback(wav_path))
                     else:
-                        logger.error("TTS produced no valid audio.")
+                        logger.error("TTS produced no valid audio: %s", wav_path)
                         os.remove(wav_path)
                         self.send_enabled = True
                         self.start_lock = False
                         self.after(0, self.enable_send_and_start)
                 except queue.Empty:
-                    logger.error("TTS timeout or connection issue.")
+                    logger.error("TTS timeout or connection issue after 15 seconds")
                     self.send_enabled = True
                     self.start_lock = False
                     self.after(0, self.enable_send_and_start)
@@ -972,6 +1042,36 @@ class InfiniteOracleGUI(tk.Tk):
                 else:
                     self.after(100, check_playback)
         self.after(100, check_playback)
+
+    def start_listening(self):
+        def listen_thread():
+            if self.start_lock or not self.send_enabled:
+                logger.debug("Listen blocked: start_lock=%s, send_enabled=%s", self.start_lock, self.send_enabled)
+                return
+            self.start_lock = True
+            self.disable_controls()
+            logger.debug("Starting listen_thread")
+            
+            audio_file = capture_audio(duration=5)
+            text = self.transcribe_audio(audio_file)
+            
+            with history_lock:
+                if self.remember_var.get():
+                    conversation_history.append({"role": "user", "content": text})
+            self.system_prompt_entry.delete("1.0", tk.END)
+            self.system_prompt_entry.insert(tk.END, text)
+            logger.debug("Transcription completed: %s", text)
+            
+            if os.path.exists(audio_file):
+                os.remove(audio_file)
+                logger.debug("Temporary audio file removed")
+            
+            self.start_lock = False
+            self.after(0, self.enable_send_and_start)
+            logger.debug("Triggering send_prompt_action with: %s", text)
+            self.send_prompt_action()
+        
+        threading.Thread(target=listen_thread, daemon=True).start()
 
     def clear_history(self):
         if self.start_lock or not self.send_enabled:
