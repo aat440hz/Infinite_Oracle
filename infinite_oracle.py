@@ -399,10 +399,10 @@ class InfiniteOracleGUI(tk.Tk):
 
         try:
             if getattr(sys, 'frozen', False):
-                base_path = sys._MEIPASS
+                base_path = os.path.dirname(sys.executable)
             else:
                 base_path = os.path.dirname(os.path.abspath(__file__))
-            icon_path = os.path.join(base_path, "oracle.png")
+            icon_path = os.path.join(base_path, "oracle.png") if not getattr(sys, 'frozen', False) else os.path.join(sys._MEIPASS, "oracle.png")
             img = Image.open(icon_path).convert("RGBA")
             icon = ImageTk.PhotoImage(img)
             self.iconphoto(True, icon)
@@ -441,20 +441,24 @@ class InfiniteOracleGUI(tk.Tk):
         self.animation_running = True
         self.animate_lock = threading.Lock()
 
-        # Load bundled Whisper base model
+        # Load Whisper model from whisper-base folder next to executable
         if getattr(sys, 'frozen', False):
-            base_path = sys._MEIPASS
-            model_dir = os.path.join(base_path, "base")
-            logger.debug(f"Loading bundled Whisper model from: {model_dir}")
+            exe_dir = os.path.dirname(sys.executable)
+            model_dir = os.path.join(exe_dir, "whisper-base")
+            model_path = os.path.join(model_dir, "base.pt")
+            logger.debug(f"Looking for Whisper model at: {model_path}")
+            if not os.path.exists(model_path):
+                error_msg = f"Whisper model 'base.pt' not found in {model_dir}. Please download it from https://huggingface.co/openai/whisper-base and place it in the 'whisper-base' folder next to the executable."
+                logger.error(error_msg)
+                messagebox.showerror("Model Not Found", error_msg)
+                raise FileNotFoundError(error_msg)
             try:
-                # Use the directory path instead of just base.pt
-                self.whisper_model = whisper.load_model(model_dir)
-                logger.debug("Whisper model loaded successfully from bundled directory")
+                self.whisper_model = whisper.load_model(model_path)
+                logger.debug("Whisper model loaded successfully from whisper-base folder")
             except Exception as e:
-                logger.error(f"Failed to load Whisper model from {model_dir}: {str(e)}")
+                logger.error(f"Failed to load Whisper model from {model_path}: {str(e)}")
                 raise
         else:
-            # For non-frozen (development) mode, use the default "base" model
             logger.debug("Loading Whisper model 'base' from default cache in development mode")
             try:
                 self.whisper_model = whisper.load_model("base")
@@ -974,7 +978,7 @@ class InfiniteOracleGUI(tk.Tk):
             send_session = setup_session(server_url, self.retries_slider.get())
             success, error_msg = self.verify_server(server_url, server_type, model)
             if not success:
-                logger.error("Server verification failed: %s", error_msg)
+                logger.error("Server verification failed: {error_msg}")
                 print(error_msg)
                 send_session.close()
                 self.send_enabled = True
@@ -982,7 +986,7 @@ class InfiniteOracleGUI(tk.Tk):
                 self.after(0, self.enable_send_and_start)
                 return
 
-            logger.debug("Sending prompt to server: %s", prompt)
+            logger.debug(f"Sending prompt to server: {prompt}")
             send_thread = threading.Thread(
                 target=self.send_prompt_with_tts_tracking,
                 args=(send_session, self.send_wisdom_queue, model, server_type, prompt, self.send_audio_queue),
@@ -1008,7 +1012,7 @@ class InfiniteOracleGUI(tk.Tk):
                 payload["max_tokens"] = int(self.max_tokens_entry.get())
                 payload["temperature"] = 0.7
 
-            logger.debug("Sending request to %s with payload: %s", self.server_url_var.get(), json.dumps(payload))
+            logger.debug(f"Sending request to {self.server_url_var.get()} with payload: {json.dumps(payload)}")
             response = session.post(self.server_url_var.get(), json=payload, timeout=self.timeout_slider.get())
             response.raise_for_status()
             data = response.json()
@@ -1016,7 +1020,7 @@ class InfiniteOracleGUI(tk.Tk):
                 data.get("message", {}).get("content", "").strip() if server_type == "Ollama"
                 else data.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
             )
-            logger.debug("Received response: %s", wisdom)
+            logger.debug(f"Received response: {wisdom}")
 
             if wisdom:
                 print(f"The Infinite Oracle speaks: {wisdom}", end="\n\n")
@@ -1024,17 +1028,17 @@ class InfiniteOracleGUI(tk.Tk):
                     if self.remember_var.get():
                         conversation_history.append({"role": "user", "content": prompt})
                         conversation_history.append({"role": "assistant", "content": wisdom})
-                logger.debug("Queueing wisdom: %s", wisdom)
+                logger.debug(f"Queueing wisdom: {wisdom}")
                 wisdom_queue.put(wisdom)
 
                 try:
                     logger.debug("Waiting for TTS audio")
                     wisdom, wav_path, pitch = audio_queue.get(timeout=15)
-                    logger.debug("Received TTS audio: %s", wav_path)
+                    logger.debug(f"Received TTS audio: {wav_path}")
                     if os.path.exists(wav_path) and os.path.getsize(wav_path) > 0:
                         self.after(0, lambda: self.wait_for_playback(wav_path))
                     else:
-                        logger.error("TTS produced no valid audio: %s", wav_path)
+                        logger.error(f"TTS produced no valid audio: {wav_path}")
                         os.remove(wav_path)
                         self.send_enabled = True
                         self.start_lock = False
@@ -1067,7 +1071,7 @@ class InfiniteOracleGUI(tk.Tk):
     def start_listening(self):
         def listen_thread():
             if self.start_lock or not self.send_enabled:
-                logger.debug("Listen blocked: start_lock=%s, send_enabled=%s", self.start_lock, self.send_enabled)
+                logger.debug(f"Listen blocked: start_lock={self.start_lock}, send_enabled={self.send_enabled}")
                 return
             self.start_lock = True
             self.disable_controls()
@@ -1081,7 +1085,7 @@ class InfiniteOracleGUI(tk.Tk):
                     conversation_history.append({"role": "user", "content": text})
             self.system_prompt_entry.delete("1.0", tk.END)
             self.system_prompt_entry.insert(tk.END, text)
-            logger.debug("Transcription completed: %s", text)
+            logger.debug(f"Transcription completed: {text}")
             
             if os.path.exists(audio_file):
                 os.remove(audio_file)
@@ -1089,7 +1093,7 @@ class InfiniteOracleGUI(tk.Tk):
             
             self.start_lock = False
             self.after(0, self.enable_send_and_start)
-            logger.debug("Triggering send_prompt_action with: %s", text)
+            logger.debug(f"Triggering send_prompt_action with: {text}")
             self.send_prompt_action()
         
         threading.Thread(target=listen_thread, daemon=True).start()
