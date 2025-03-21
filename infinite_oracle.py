@@ -1101,7 +1101,7 @@ class InfiniteOracleGUI(tk.Tk):
                             conversation_history.append({"role": "user", "content": text})
                     self.system_prompt_entry.delete("1.0", tk.END)
                     self.system_prompt_entry.insert(tk.END, text)
-        
+            
             except requests.RequestException as e:
                 logger.error(f"Whisper server error: {str(e)}")
                 if hasattr(e.response, 'text'):
@@ -1114,48 +1114,15 @@ class InfiniteOracleGUI(tk.Tk):
                     logger.debug("Temporary audio file removed")
                 session.close()
             
-            if text:
-                server_url = self.server_url_var.get()
-                server_type = self.server_type_var.get()
-                model = self.model_var.get()
-                session = setup_session(server_url, self.retries_slider.get())
-                try:
-                    with history_lock:
-                        messages = [{"role": "system", "content": SYSTEM_PROMPT}] + conversation_history
-                    payload = {
-                        "model": model,
-                        "messages": messages,
-                        "stream": False
-                    }
-                    if server_type != "Ollama":
-                        payload["max_tokens"] = int(self.max_tokens_entry.get())
-                        payload["temperature"] = 0.7
-                    
-                    logger.debug("Sending transcribed text to server: %s", text)
-                    response = session.post(server_url, json=payload, timeout=self.timeout_slider.get())
-                    response.raise_for_status()
-                    data = response.json()
-                    wisdom = (
-                        data.get("message", {}).get("content", "").strip() if server_type == "Ollama"
-                        else data.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
-                    )
-                    
-                    if wisdom:
-                        print(f"The Infinite Oracle speaks: {wisdom}", end="\n\n")
-                        with history_lock:
-                            if self.remember_var.get():
-                                conversation_history.append({"role": "assistant", "content": wisdom})
-                        self.send_wisdom_queue.put(wisdom)
-        
-                except requests.RequestException as e:
-                    logger.error(f"{server_type} connection failed in Listen mode: {str(e)}")
-                    print(f"{server_type} error: {str(e)}")
-                finally:
-                    session.close()
-        
             self.start_lock = False
             self.after(0, self.enable_send_and_start)
-    
+            
+            if text:
+                logger.debug("Triggering send_prompt_action with: %s", text)
+                self.send_prompt_action()
+            else:
+                logger.debug("No transcription available, skipping send_prompt_action")
+        
         threading.Thread(target=listen_thread, daemon=True).start()
 
     def clear_history(self):
