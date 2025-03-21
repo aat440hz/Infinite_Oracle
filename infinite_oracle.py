@@ -93,7 +93,7 @@ def ping_server(server_url, server_type, model, timeout, retries):
     finally:
         session.close()
 
-def generate_wisdom(gui, wisdom_queue, model, get_server_type_func, stop_event, get_request_interval_func):
+def generate_wisdom(gui, wisdom_queue, model, get_server_type_func, stop_event, get_request_interval_func, system_prompt):
     global conversation_history
     while not stop_event.is_set():
         server_url = gui.server_url_var.get()
@@ -101,7 +101,7 @@ def generate_wisdom(gui, wisdom_queue, model, get_server_type_func, stop_event, 
         with history_lock:
             if not gui.remember_var.get():
                 conversation_history = []
-            messages = [{"role": "system", "content": SYSTEM_PROMPT}] + conversation_history + [{"role": "user", "content": "Provide your wisdom."}]
+            messages = [{"role": "system", "content": system_prompt}] + conversation_history + [{"role": "user", "content": system_prompt}]
         payload = {
             "model": model,
             "messages": messages,
@@ -124,7 +124,7 @@ def generate_wisdom(gui, wisdom_queue, model, get_server_type_func, stop_event, 
                 print(f"The Infinite Oracle speaks: {wisdom}", end="\n\n")
                 with history_lock:
                     if gui.remember_var.get():
-                        conversation_history.append({"role": "user", "content": "Provide your wisdom."})
+                        conversation_history.append({"role": "user", "content": system_prompt})
                         conversation_history.append({"role": "assistant", "content": wisdom})
                 logger.debug("Adding wisdom to queue: %s", wisdom)
                 wisdom_queue.put(wisdom)
@@ -445,7 +445,7 @@ class InfiniteOracleGUI(tk.Tk):
         self.record_var = tk.BooleanVar(value=False)
         self.is_audio_playing = False
         self.oracle_frame_index = 0
-        self.glow_frame_index = 0
+        self.glow_frame_index = 0  # Fixed from 'org' to 0
         self.image_spin_speed = 5
         self.animation_running = True
         self.animate_lock = threading.Lock()
@@ -829,7 +829,7 @@ class InfiniteOracleGUI(tk.Tk):
             server_url = self.server_url_var.get()
             server_type = self.server_type_var.get()
             model = self.model_var.get()
-            SYSTEM_PROMPT = self.system_prompt_entry.get("1.0", tk.END).strip()
+            SYSTEM_PROMPT = self.system_prompt_entry.get("1.0", tk.END).strip()  # Get the system prompt from the text box
             tts_url = self.tts_url_var.get()
             speaker_id = self.speaker_id_var.get()
 
@@ -865,7 +865,7 @@ class InfiniteOracleGUI(tk.Tk):
 
             self.generator_thread = threading.Thread(
                 target=generate_wisdom,
-                args=(self, self.wisdom_queue, model, lambda: self.server_type_var.get(), self.stop_event, lambda: float(self.request_interval_entry.get())),
+                args=(self, self.wisdom_queue, model, lambda: self.server_type_var.get(), self.stop_event, lambda: float(self.request_interval_entry.get()), SYSTEM_PROMPT),
                 daemon=True
             )
             self.tts_thread = threading.Thread(
