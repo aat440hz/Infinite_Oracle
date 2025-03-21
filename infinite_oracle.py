@@ -946,32 +946,29 @@ class InfiniteOracleGUI(tk.Tk):
                 logger.warning("Missing fields: server_url=%s, server_type=%s, model=%s, prompt=%s, tts_url=%s, speaker_id=%s",
                                server_url, server_type, model, prompt, tts_url, speaker_id)
                 messagebox.showwarning("Input Error", "Please fill all fields.")
-                self.send_enabled = True
-                self.start_lock = False
-                self.after(0, self.enable_send_and_start)
-                return
+            else:
+                self.reset_tts_threads()
+                logger.debug("TTS threads reset")
 
-            self.reset_tts_threads()
-            logger.debug("TTS threads reset")
+                send_session = setup_session(server_url, self.retries_slider.get())
+                success, error_msg = self.verify_server(server_url, server_type, model)
+                if not success:
+                    logger.error("Server verification failed: %s", error_msg)
+                    print(error_msg)
+                else:
+                    logger.debug("Sending prompt to server: %s", prompt)
+                    send_thread = threading.Thread(
+                        target=self.send_prompt_with_tts_tracking,
+                        args=(send_session, self.send_wisdom_queue, model, server_type, prompt, self.send_audio_queue),
+                        daemon=True
+                    )
+                    send_thread.start()
+                    send_thread.join(timeout=20)  # Wait for thread to complete with a timeout
 
-            send_session = setup_session(server_url, self.retries_slider.get())
-            success, error_msg = self.verify_server(server_url, server_type, model)
-            if not success:
-                logger.error("Server verification failed: %s", error_msg)
-                print(error_msg)
-                send_session.close()
-                self.send_enabled = True
-                self.start_lock = False
-                self.after(0, self.enable_send_and_start)
-                return
-
-            logger.debug("Sending prompt to server: %s", prompt)
-            send_thread = threading.Thread(
-                target=self.send_prompt_with_tts_tracking,
-                args=(send_session, self.send_wisdom_queue, model, server_type, prompt, self.send_audio_queue),
-                daemon=True
-            )
-            send_thread.start()
+            # Always unlock UI, even on failure
+            self.send_enabled = True
+            self.start_lock = False
+            self.after(0, self.enable_send_and_start)
 
         threading.Thread(target=send_thread, daemon=True).start()
 
@@ -1019,21 +1016,12 @@ class InfiniteOracleGUI(tk.Tk):
                     else:
                         logger.error("TTS produced no valid audio: %s", wav_path)
                         os.remove(wav_path)
-                        self.send_enabled = True
-                        self.start_lock = False
-                        self.after(0, self.enable_send_and_start)
                 except queue.Empty:
                     logger.error("TTS timeout or connection issue after 15 seconds")
-                    self.send_enabled = True
-                    self.start_lock = False
-                    self.after(0, self.enable_send_and_start)
 
         except requests.RequestException as e:
             logger.error(f"{server_type} connection failed: {str(e)}")
             print(f"{server_type} error: {str(e)}")
-            self.send_enabled = True
-            self.start_lock = False
-            self.after(0, self.enable_send_and_start)
         finally:
             session.close()
 
@@ -1083,7 +1071,7 @@ class InfiniteOracleGUI(tk.Tk):
                         timeout=self.timeout_slider.get()
                     )
                     response.raise_for_status()
-                    text = response.text.strip()  # Use response.text instead of response.json()
+                    text = response.text.strip()
                     logger.debug("Transcription from server: %s", text)
                     print(f"Transcribed: {text}")
                     
