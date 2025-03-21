@@ -204,10 +204,12 @@ def play_audio(audio_queue, stop_event, get_interval_func, get_variation_func, g
     if getattr(sys, 'frozen', False):
         ffmpeg_path = os.path.join(sys._MEIPASS, "ffmpeg", "ffmpeg.exe")
         AudioSegment.converter = ffmpeg_path
+    
     while not stop_event.is_set():
+        interval = max(0.5, get_interval_func() + random.uniform(-get_variation_func(), get_variation_func())) if is_start_mode else 0
         try:
-            logger.debug("Waiting for audio in playback thread")
-            wisdom, wav_path, pitch = audio_queue.get()
+            logger.debug("Waiting for audio in playback thread (Start Mode: %s)", is_start_mode)
+            wisdom, wav_path, pitch = audio_queue.get(timeout=5 if is_start_mode else 1)  # Shorter timeout for Send Mode
             logger.debug("Received audio: %s", wav_path)
             with playback_lock:
                 if not stop_event.is_set():
@@ -243,19 +245,29 @@ def play_audio(audio_queue, stop_event, get_interval_func, get_variation_func, g
 
             os.remove(wav_path)
             audio_queue.task_done()
-            interval = max(0.1, get_interval_func() + random.uniform(-get_variation_func(), get_variation_func())) if is_start_mode else 0
-            if not stop_event.is_set():
-                time.sleep(interval)
         except queue.Empty:
-            time.sleep(0.1)
+            logger.debug("Audio queue empty in playback thread (Start Mode: %s)", is_start_mode)
+            if is_start_mode:
+                time.sleep(interval)  # Respect interval even if queue is empty in Start Mode
+            else:
+                time.sleep(0.1)  # Minimal delay for Send Mode
+            continue
         except Exception as e:
             logger.error(f"Playback error: {str(e)}")
             if 'wav_path' in locals() and os.path.exists(wav_path):
                 os.remove(wav_path)
-            if not is_start_mode:  # Only unlock for Send mode
+            audio_queue.task_done()
+            if is_start_mode:
+                time.sleep(interval)  # Respect interval on failure in Start Mode
+            else:
                 gui.send_enabled = True
                 gui.start_lock = False
                 gui.after(0, gui.enable_send_and_start)
+            continue
+        
+        if not stop_event.is_set():
+            logger.debug("Applying interval %s seconds (Start Mode: %s)", interval, is_start_mode)
+            time.sleep(interval)
 
 def capture_audio(duration=5, filename=None):
     CHUNK = 1024
@@ -846,6 +858,9 @@ class InfiniteOracleGUI(tk.Tk):
             self.is_running = True
             self.stop_event.clear()
             self.stop_button.config(state=tk.NORMAL, bg="red")
+
+            logger.info("Starting Oracle in Start Mode with interval=%s, variation=%s", 
+                        self.interval_slider.get(), self.variation_slider.get())
 
             self.generator_thread = threading.Thread(
                 target=generate_wisdom,
