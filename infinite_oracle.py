@@ -5,7 +5,6 @@ import queue
 import tempfile
 import os
 import platform
-import soundfile as sf
 import subprocess
 import tkinter as tk
 from tkinter import messagebox, scrolledtext
@@ -21,6 +20,8 @@ import random
 from PIL import Image, ImageTk, ImageSequence
 import pyaudio
 import wave
+import librosa
+import numpy as np
 
 # Server defaults
 DEFAULT_OLLAMA_URL = "http://localhost:11434/api/chat"
@@ -200,6 +201,17 @@ def apply_reverb(audio, reverb_value):
     reverb_audio = audio.overlay(silence + echo)
     return reverb_audio
 
+def pitch_shift_with_librosa(audio_segment, semitones):
+    samples = np.array(audio_segment.get_array_of_samples())
+    sample_rate = audio_segment.frame_rate
+    shifted_samples = librosa.effects.pitch_shift(samples.astype(float), sr=sample_rate, n_steps=semitones)
+    return AudioSegment(
+        shifted_samples.astype(np.int16).tobytes(),
+        frame_rate=sample_rate,
+        sample_width=audio_segment.sample_width,
+        channels=audio_segment.channels
+    )
+
 def play_audio(audio_queue, stop_event, get_interval_func, get_variation_func, gui, duration_queue=None, is_start_mode=False):
     if getattr(sys, 'frozen', False):
         ffmpeg_path = os.path.join(sys._MEIPASS, "ffmpeg", "ffmpeg.exe")
@@ -218,10 +230,7 @@ def play_audio(audio_queue, stop_event, get_interval_func, get_variation_func, g
                         duration_queue.put(duration_seconds)
 
                     if pitch != 0:
-                        octaves = pitch / 12.0
-                        new_sample_rate = int(audio.frame_rate * (2.0 ** octaves))
-                        audio = audio._spawn(audio.raw_data, overrides={"frame_rate": new_sample_rate})
-                        audio = audio.set_frame_rate(22050)
+                        audio = pitch_shift_with_librosa(audio, pitch)
 
                     reverb_value = gui.reverb_slider.get()
                     if reverb_value > 0:
@@ -445,7 +454,7 @@ class InfiniteOracleGUI(tk.Tk):
         self.record_var = tk.BooleanVar(value=False)
         self.is_audio_playing = False
         self.oracle_frame_index = 0
-        self.glow_frame_index = 0  # Fixed from 'org' to 0
+        self.glow_frame_index = 0
         self.image_spin_speed = 5
         self.animation_running = True
         self.animate_lock = threading.Lock()
@@ -829,7 +838,7 @@ class InfiniteOracleGUI(tk.Tk):
             server_url = self.server_url_var.get()
             server_type = self.server_type_var.get()
             model = self.model_var.get()
-            SYSTEM_PROMPT = self.system_prompt_entry.get("1.0", tk.END).strip()  # Get the system prompt from the text box
+            SYSTEM_PROMPT = self.system_prompt_entry.get("1.0", tk.END).strip()
             tts_url = self.tts_url_var.get()
             speaker_id = self.speaker_id_var.get()
 
