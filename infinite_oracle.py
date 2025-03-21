@@ -29,7 +29,7 @@ DEFAULT_OLLAMA_MODEL = "llama3.2:latest"
 DEFAULT_LM_STUDIO_MODEL = "qwen2.5-1.5b-instruct"
 DEFAULT_TTS_URL = "http://localhost:5002/api/tts"
 DEFAULT_SPEAKER_ID = "p267"
-DEFAULT_WHISPER_SERVER_URL = "http://localhost:9000"
+DEFAULT_WHISPER_SERVER_URL = "http://192.168.0.163:9000"
 
 # Configuration file
 CONFIG_FILE = "oracle_config.json"
@@ -199,7 +199,7 @@ def apply_reverb(audio, reverb_value):
     reverb_audio = audio.overlay(silence + echo)
     return reverb_audio
 
-def play_audio(audio_queue, stop_event, get_interval_func, get_variation_func, gui, duration_queue, is_start_mode=False):
+def play_audio(audio_queue, stop_event, get_interval_func, get_variation_func, gui, is_start_mode=False):
     if getattr(sys, 'frozen', False):
         ffmpeg_path = os.path.join(sys._MEIPASS, "ffmpeg", "ffmpeg.exe")
         AudioSegment.converter = ffmpeg_path
@@ -213,7 +213,6 @@ def play_audio(audio_queue, stop_event, get_interval_func, get_variation_func, g
                     audio = AudioSegment.from_wav(wav_path)
                     duration_seconds = len(audio) / 1000.0
                     logger.info(f"Audio duration: {duration_seconds} seconds")
-                    duration_queue.put(duration_seconds)  # Pass duration to send_prompt_action
 
                     if pitch != 0:
                         octaves = pitch / 12.0
@@ -424,7 +423,6 @@ class InfiniteOracleGUI(tk.Tk):
         self.session = None
         self.wisdom_queue = queue.Queue(maxsize=10)
         self.audio_queue = queue.Queue(maxsize=10)
-        self.duration_queue = queue.Queue(maxsize=1)  # Queue to pass TTS duration
         self.is_running = False
         self.start_lock = False
         self.stop_event = threading.Event()
@@ -500,7 +498,7 @@ class InfiniteOracleGUI(tk.Tk):
         )
         self.send_playback_thread = threading.Thread(
             target=play_audio,
-            args=(self.send_audio_queue, self.send_stop_event, lambda: 0, lambda: 0, self, self.duration_queue, False),
+            args=(self.send_audio_queue, self.send_stop_event, lambda: 0, lambda: 0, self, False),
             daemon=True
         )
         self.send_tts_thread.start()
@@ -855,7 +853,7 @@ class InfiniteOracleGUI(tk.Tk):
             )
             self.playback_thread = threading.Thread(
                 target=play_audio,
-                args=(self.audio_queue, self.stop_event, self.interval_slider.get, self.variation_slider.get, self, self.duration_queue, True),
+                args=(self.audio_queue, self.stop_event, self.interval_slider.get, self.variation_slider.get, self, True),
                 daemon=True
             )
 
@@ -944,7 +942,6 @@ class InfiniteOracleGUI(tk.Tk):
             tts_url = self.tts_url_var.get()
             speaker_id = self.speaker_id_var.get()
 
-            audio_duration = 0  # Default duration if TTS fails
             if not all([server_url, server_type, model, prompt, tts_url, speaker_id]):
                 logger.warning("Missing fields: server_url=%s, server_type=%s, model=%s, prompt=%s, tts_url=%s, speaker_id=%s",
                                server_url, server_type, model, prompt, tts_url, speaker_id)
@@ -967,13 +964,11 @@ class InfiniteOracleGUI(tk.Tk):
                     )
                     send_thread.start()
                     send_thread.join(timeout=20)  # Wait for thread to complete with a timeout
-                    if not self.duration_queue.empty():
-                        audio_duration = self.duration_queue.get()  # Get the duration if available
 
-            # Unlock UI after audio duration (or immediately if no audio)
+            # Always unlock UI, even on failure
             self.send_enabled = True
             self.start_lock = False
-            self.after(int(audio_duration * 1000), self.enable_send_and_start)  # Delay in milliseconds
+            self.after(0, self.enable_send_and_start)
 
         threading.Thread(target=send_thread, daemon=True).start()
 
