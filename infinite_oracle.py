@@ -236,7 +236,11 @@ def play_audio(audio_queue, stop_event, get_interval_func, get_variation_func, g
                     if reverb_value > 0:
                         audio = apply_reverb(audio, reverb_value)
 
+                    # Normalize the audio first to balance levels
                     audio = normalize(audio)
+                    # Apply a gain increase (e.g., +10 dB) to boost volume
+                    audio = audio + 5  # Adjust this value as needed (e.g., +5 to +15 dB)
+
                     gui.start_spinning(len(audio) / 1000.0)
                     play(audio)
                     gui.stop_spinning()
@@ -405,7 +409,7 @@ class InfiniteOracleGUI(tk.Tk):
         super().__init__()
         self.title("Infinite Oracle Control Panel")
         self.state("zoomed")
-        self.geometry("1440x1080")
+        self.geometry("1400x1080")
         self.withdraw()
 
         self.loading_screen = LoadingScreen(self)
