@@ -29,7 +29,7 @@ DEFAULT_OLLAMA_MODEL = "llama3.2:latest"
 DEFAULT_LM_STUDIO_MODEL = "qwen2.5-1.5b-instruct"
 DEFAULT_TTS_URL = "http://localhost:5002/api/tts"
 DEFAULT_SPEAKER_ID = "p267"
-DEFAULT_WHISPER_SERVER_URL = "http://192.168.0.163:9000"
+DEFAULT_WHISPER_SERVER_URL = "http://localhost:9000"
 
 # Configuration file
 CONFIG_FILE = "oracle_config.json"
