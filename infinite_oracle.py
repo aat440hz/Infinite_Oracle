@@ -126,6 +126,7 @@ def generate_wisdom(gui, wisdom_queue, model, get_server_type_func, stop_event, 
                     if gui.remember_var.get():
                         conversation_history.append({"role": "user", "content": "Provide your wisdom."})
                         conversation_history.append({"role": "assistant", "content": wisdom})
+                logger.debug("Adding wisdom to queue: %s", wisdom)
                 wisdom_queue.put(wisdom)
         except requests.RequestException as e:
             logger.error(f"{server_type} connection failed: {str(e)}")
@@ -199,7 +200,7 @@ def apply_reverb(audio, reverb_value):
     reverb_audio = audio.overlay(silence + echo)
     return reverb_audio
 
-def play_audio(audio_queue, stop_event, get_interval_func, get_variation_func, gui, is_start_mode=False):
+def play_audio(audio_queue, stop_event, get_interval_func, get_variation_func, gui, duration_queue=None, is_start_mode=False):
     if getattr(sys, 'frozen', False):
         ffmpeg_path = os.path.join(sys._MEIPASS, "ffmpeg", "ffmpeg.exe")
         AudioSegment.converter = ffmpeg_path
@@ -213,6 +214,8 @@ def play_audio(audio_queue, stop_event, get_interval_func, get_variation_func, g
                     audio = AudioSegment.from_wav(wav_path)
                     duration_seconds = len(audio) / 1000.0
                     logger.info(f"Audio duration: {duration_seconds} seconds")
+                    if duration_queue and not is_start_mode:  # Only store duration for Send mode
+                        duration_queue.put(duration_seconds)
 
                     if pitch != 0:
                         octaves = pitch / 12.0
@@ -249,9 +252,10 @@ def play_audio(audio_queue, stop_event, get_interval_func, get_variation_func, g
             logger.error(f"Playback error: {str(e)}")
             if 'wav_path' in locals() and os.path.exists(wav_path):
                 os.remove(wav_path)
-            gui.send_enabled = True
-            gui.start_lock = False
-            gui.after(0, gui.enable_send_and_start)
+            if not is_start_mode:  # Only unlock for Send mode
+                gui.send_enabled = True
+                gui.start_lock = False
+                gui.after(0, gui.enable_send_and_start)
 
 def capture_audio(duration=5, filename=None):
     CHUNK = 1024
@@ -423,6 +427,7 @@ class InfiniteOracleGUI(tk.Tk):
         self.session = None
         self.wisdom_queue = queue.Queue(maxsize=10)
         self.audio_queue = queue.Queue(maxsize=10)
+        self.duration_queue = queue.Queue(maxsize=1)  # Added for Send mode TTS duration
         self.is_running = False
         self.start_lock = False
         self.stop_event = threading.Event()
@@ -498,7 +503,7 @@ class InfiniteOracleGUI(tk.Tk):
         )
         self.send_playback_thread = threading.Thread(
             target=play_audio,
-            args=(self.send_audio_queue, self.send_stop_event, lambda: 0, lambda: 0, self, False),
+            args=(self.send_audio_queue, self.send_stop_event, lambda: 0, lambda: 0, self, self.duration_queue, False),
             daemon=True
         )
         self.send_tts_thread.start()
@@ -810,6 +815,7 @@ class InfiniteOracleGUI(tk.Tk):
     def start_oracle(self):
         def start_thread():
             if self.start_lock or self.is_running:
+                logger.debug("Start blocked: start_lock=%s, is_running=%s", self.start_lock, self.is_running)
                 return
             self.start_lock = True
             self.disable_controls()
@@ -853,15 +859,13 @@ class InfiniteOracleGUI(tk.Tk):
             )
             self.playback_thread = threading.Thread(
                 target=play_audio,
-                args=(self.audio_queue, self.stop_event, self.interval_slider.get, self.variation_slider.get, self, True),
+                args=(self.audio_queue, self.stop_event, self.interval_slider.get, self.variation_slider.get, self, None, True),
                 daemon=True
             )
 
             self.generator_thread.start()
             self.tts_thread.start()
             self.playback_thread.start()
-
-            self.after(500, lambda: setattr(self, 'start_lock', False))
 
         threading.Thread(target=start_thread, daemon=True).start()
 
@@ -922,6 +926,8 @@ class InfiniteOracleGUI(tk.Tk):
                 self.retries_slider.config(state=tk.NORMAL)
                 server_type = self.server_type_var.get()
                 self.max_tokens_entry.config(state=tk.NORMAL if server_type != "Ollama" else tk.DISABLED, bg="white" if server_type != "Ollama" else "grey")
+                self.start_lock = False
+                self.send_enabled = True
 
         threading.Thread(target=stop_thread, daemon=True).start()
 
@@ -942,6 +948,7 @@ class InfiniteOracleGUI(tk.Tk):
             tts_url = self.tts_url_var.get()
             speaker_id = self.speaker_id_var.get()
 
+            audio_duration = 0  # Default duration if TTS fails
             if not all([server_url, server_type, model, prompt, tts_url, speaker_id]):
                 logger.warning("Missing fields: server_url=%s, server_type=%s, model=%s, prompt=%s, tts_url=%s, speaker_id=%s",
                                server_url, server_type, model, prompt, tts_url, speaker_id)
@@ -964,11 +971,13 @@ class InfiniteOracleGUI(tk.Tk):
                     )
                     send_thread.start()
                     send_thread.join(timeout=20)  # Wait for thread to complete with a timeout
+                    if not self.duration_queue.empty():
+                        audio_duration = self.duration_queue.get()  # Get the duration if available
 
-            # Always unlock UI, even on failure
+            # Unlock UI after audio duration (or immediately if no audio)
             self.send_enabled = True
             self.start_lock = False
-            self.after(0, self.enable_send_and_start)
+            self.after(int(audio_duration * 1000), self.enable_send_and_start)  # Delay in milliseconds
 
         threading.Thread(target=send_thread, daemon=True).start()
 
@@ -1012,6 +1021,9 @@ class InfiniteOracleGUI(tk.Tk):
                     wisdom, wav_path, pitch = audio_queue.get(timeout=15)
                     logger.debug("Received TTS audio: %s", wav_path)
                     if os.path.exists(wav_path) and os.path.getsize(wav_path) > 0:
+                        audio = AudioSegment.from_wav(wav_path)
+                        duration_seconds = len(audio) / 1000.0
+                        self.duration_queue.put(duration_seconds)  # Store duration for Send mode
                         self.after(0, lambda: self.wait_for_playback(wav_path))
                     else:
                         logger.error("TTS produced no valid audio: %s", wav_path)
