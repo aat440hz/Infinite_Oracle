@@ -557,9 +557,12 @@ class InfiniteOracleGUI(tk.Tk):
 
     def start_spinning(self, duration_seconds):
         self.is_audio_playing = True
+        self.listen_button.config(state=tk.DISABLED)  # Disable Listen button during playback
 
     def stop_spinning(self):
         self.is_audio_playing = False
+        if not self.start_lock and self.send_enabled and not self.is_running:
+            self.listen_button.config(state=tk.NORMAL)  # Re-enable only if appropriate
 
     def update_from_config(self):
         self.config = load_config()
@@ -783,7 +786,7 @@ class InfiniteOracleGUI(tk.Tk):
         if not self.is_running and not self.start_lock:
             self.send_button.config(state=tk.NORMAL)
             self.start_button.config(state=tk.NORMAL)
-            self.listen_button.config(state=tk.NORMAL)
+            self.listen_button.config(state=tk.NORMAL if not self.is_audio_playing else tk.DISABLED)
             self.save_button.config(state=tk.NORMAL)
             self.clear_button.config(state=tk.NORMAL if self.remember_var.get() else tk.DISABLED)
             self.remember_check.config(state=tk.NORMAL)
