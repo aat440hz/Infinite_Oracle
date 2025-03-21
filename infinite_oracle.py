@@ -21,7 +21,6 @@ import random
 from PIL import Image, ImageTk, ImageSequence
 import pyaudio
 import wave
-import whisper
 
 # Server defaults
 DEFAULT_OLLAMA_URL = "http://localhost:11434/api/chat"
@@ -30,6 +29,7 @@ DEFAULT_OLLAMA_MODEL = "llama3.2:latest"
 DEFAULT_LM_STUDIO_MODEL = "qwen2.5-1.5b-instruct"
 DEFAULT_TTS_URL = "http://localhost:5002/api/tts"
 DEFAULT_SPEAKER_ID = "p267"
+DEFAULT_WHISPER_SERVER_URL = "http://192.168.0.163:9000"
 
 # Configuration file
 CONFIG_FILE = "oracle_config.json"
@@ -294,6 +294,7 @@ def load_config():
             "model": DEFAULT_OLLAMA_MODEL,
             "tts_url": DEFAULT_TTS_URL,
             "speaker_id": DEFAULT_SPEAKER_ID,
+            "whisper_server": DEFAULT_WHISPER_SERVER_URL,
             "pitch": 0,
             "reverb": 0,
             "interval": 2.0,
@@ -308,6 +309,7 @@ def load_config():
             "model": DEFAULT_LM_STUDIO_MODEL,
             "tts_url": DEFAULT_TTS_URL,
             "speaker_id": DEFAULT_SPEAKER_ID,
+            "whisper_server": DEFAULT_WHISPER_SERVER_URL,
             "pitch": 0,
             "reverb": 0,
             "interval": 2.0,
@@ -336,6 +338,7 @@ def save_config(gui):
         "model": gui.model_var.get(),
         "tts_url": gui.tts_url_var.get(),
         "speaker_id": gui.speaker_id_var.get(),
+        "whisper_server": gui.whisper_server_var.get(),
         "pitch": gui.pitch_slider.get(),
         "reverb": gui.reverb_slider.get(),
         "interval": gui.interval_slider.get(),
@@ -416,6 +419,7 @@ class InfiniteOracleGUI(tk.Tk):
         self.model_var = tk.StringVar(value=self.config["Ollama"]["model"])
         self.tts_url_var = tk.StringVar(value=self.config["Ollama"]["tts_url"])
         self.speaker_id_var = tk.StringVar(value=self.config["Ollama"]["speaker_id"])
+        self.whisper_server_var = tk.StringVar(value=self.config["Ollama"]["whisper_server"])
         self.session = None
         self.wisdom_queue = queue.Queue(maxsize=10)
         self.audio_queue = queue.Queue(maxsize=10)
@@ -440,7 +444,6 @@ class InfiniteOracleGUI(tk.Tk):
         self.image_spin_speed = 5
         self.animation_running = True
         self.animate_lock = threading.Lock()
-        self.whisper_model = whisper.load_model("base")  # Load Whisper model
 
         try:
             if getattr(sys, 'frozen', False):
@@ -561,6 +564,7 @@ class InfiniteOracleGUI(tk.Tk):
         self.model_var.set(config["model"])
         self.tts_url_var.set(config["tts_url"])
         self.speaker_id_var.set(config["speaker_id"])
+        self.whisper_server_var.set(config["whisper_server"])
         self.pitch_slider.set(config["pitch"])
         self.reverb_slider.set(config["reverb"])
         self.interval_slider.set(config["interval"])
@@ -592,13 +596,6 @@ class InfiniteOracleGUI(tk.Tk):
                 self.image_canvas.config(width=canvas_size, height=canvas_size)
                 self.image_canvas.coords(self.glow_item, canvas_size // 2, canvas_size // 2)
                 self.image_canvas.coords(self.oracle_item, canvas_size // 2, canvas_size // 2)
-
-    def transcribe_audio(self, audio_path):
-        result = self.whisper_model.transcribe(audio_path)
-        text = result["text"].strip()
-        logger.debug("Transcribed text: %s", text)
-        print(f"Transcribed: {text}")
-        return text
 
     def create_widgets(self):
         self.configure(bg="#2b2b2b")
@@ -632,6 +629,10 @@ class InfiniteOracleGUI(tk.Tk):
         tk.Label(self.left_frame, text="Speaker ID (e.g., p267):", bg="#2b2b2b", fg="white").pack(pady=5)
         self.speaker_id_entry = tk.Entry(self.left_frame, textvariable=self.speaker_id_var, width=40)
         self.speaker_id_entry.pack(pady=5)
+
+        tk.Label(self.left_frame, text="Whisper Server URL:", bg="#2b2b2b", fg="white").pack(pady=5)
+        self.whisper_server_entry = tk.Entry(self.left_frame, textvariable=self.whisper_server_var, width=40)
+        self.whisper_server_entry.pack(pady=5)
 
         prompt_frame = tk.Frame(self.left_frame, bg="#2b2b2b")
         prompt_frame.pack(pady=5, fill=tk.X)
@@ -759,6 +760,7 @@ class InfiniteOracleGUI(tk.Tk):
         self.model_entry.config(state=tk.DISABLED)
         self.tts_url_entry.config(state=tk.DISABLED)
         self.speaker_id_entry.config(state=tk.DISABLED)
+        self.whisper_server_entry.config(state=tk.DISABLED)
         self.system_prompt_entry.config(state=tk.DISABLED)
         self.pitch_slider.config(state=tk.DISABLED)
         self.reverb_slider.config(state=tk.DISABLED)
@@ -783,6 +785,7 @@ class InfiniteOracleGUI(tk.Tk):
             self.model_entry.config(state=tk.NORMAL)
             self.tts_url_entry.config(state=tk.NORMAL)
             self.speaker_id_entry.config(state=tk.NORMAL)
+            self.whisper_server_entry.config(state=tk.NORMAL)
             self.system_prompt_entry.config(state=tk.NORMAL)
             self.pitch_slider.config(state=tk.NORMAL)
             self.reverb_slider.config(state=tk.NORMAL)
@@ -907,6 +910,7 @@ class InfiniteOracleGUI(tk.Tk):
                 self.model_entry.config(state=tk.NORMAL)
                 self.tts_url_entry.config(state=tk.NORMAL)
                 self.speaker_id_entry.config(state=tk.NORMAL)
+                self.whisper_server_entry.config(state=tk.NORMAL)
                 self.system_prompt_entry.config(state=tk.NORMAL)
                 self.stop_button.config(state=tk.DISABLED, bg="lightgray")
                 self.pitch_slider.config(state=tk.NORMAL)
@@ -1052,24 +1056,64 @@ class InfiniteOracleGUI(tk.Tk):
             self.disable_controls()
             logger.debug("Starting listen_thread")
             
+            # Capture audio
             audio_file = capture_audio(duration=5)
-            text = self.transcribe_audio(audio_file)
             
-            with history_lock:
-                if self.remember_var.get():
-                    conversation_history.append({"role": "user", "content": text})
-            self.system_prompt_entry.delete("1.0", tk.END)
-            self.system_prompt_entry.insert(tk.END, text)
-            logger.debug("Transcription completed: %s", text)
+            # Send audio to Whisper server
+            whisper_server_url = self.whisper_server_var.get()
+            if not whisper_server_url.endswith("/asr"):
+                whisper_server_url = f"{whisper_server_url.rstrip('/')}/asr"
             
-            if os.path.exists(audio_file):
-                os.remove(audio_file)
-                logger.debug("Temporary audio file removed")
+            # Set all expected query parameters
+            params = {
+                "encode": "true",
+                "task": "transcribe",
+                "language": "en",
+                "output": "txt"
+            }
+            
+            text = ""  # Default value to avoid UnboundLocalError
+            try:
+                session = setup_session(whisper_server_url, retries=self.retries_slider.get())
+                with open(audio_file, "rb") as f:
+                    response = session.post(
+                        whisper_server_url,
+                        files={"audio_file": (os.path.basename(audio_file), f, "audio/wav")},
+                        params=params,
+                        timeout=self.timeout_slider.get()
+                    )
+                    response.raise_for_status()
+                    text = response.text.strip()  # Use response.text instead of response.json()
+                    logger.debug("Transcription from server: %s", text)
+                    print(f"Transcribed: {text}")
+                    
+                    # Update GUI with transcribed text
+                    with history_lock:
+                        if self.remember_var.get():
+                            conversation_history.append({"role": "user", "content": text})
+                    self.system_prompt_entry.delete("1.0", tk.END)
+                    self.system_prompt_entry.insert(tk.END, text)
+            
+            except requests.RequestException as e:
+                logger.error(f"Whisper server error: {str(e)}")
+                if hasattr(e.response, 'text'):
+                    logger.error(f"Response body: {e.response.text}")
+                print(f"Error contacting Whisper server: {str(e)}")
+            
+            finally:
+                if os.path.exists(audio_file):
+                    os.remove(audio_file)
+                    logger.debug("Temporary audio file removed")
+                session.close()
             
             self.start_lock = False
             self.after(0, self.enable_send_and_start)
-            logger.debug("Triggering send_prompt_action with: %s", text)
-            self.send_prompt_action()
+            
+            if text:
+                logger.debug("Triggering send_prompt_action with: %s", text)
+                self.send_prompt_action()
+            else:
+                logger.debug("No transcription available, skipping send_prompt_action")
         
         threading.Thread(target=listen_thread, daemon=True).start()
 
