@@ -193,7 +193,7 @@ def apply_reverb(audio, reverb_value):
     if reverb_value <= 0:
         return audio
     reverb_factor = reverb_value / 5.0
-    delay_ms = 20 + (reverb_factor * 20)
+    delay_ms = 50 + (reverb_factor * 10)
     gain_db = -20 + (reverb_factor * 4)
     echo = audio[:].fade_in(10).fade_out(50)
     echo = echo - abs(gain_db)
@@ -409,7 +409,7 @@ class InfiniteOracleGUI(tk.Tk):
         super().__init__()
         self.title("Infinite Oracle Control Panel")
         self.state("zoomed")
-        self.geometry("1200x1080")
+        self.geometry("1000x1080")
         self.withdraw()
 
         self.loading_screen = LoadingScreen(self)
