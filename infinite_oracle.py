@@ -409,7 +409,7 @@ class InfiniteOracleGUI(tk.Tk):
         super().__init__()
         self.title("Infinite Oracle Control Panel")
         self.state("zoomed")
-        self.geometry("1000x1080")
+        self.geometry("1000x900")
         self.withdraw()
 
         self.loading_screen = LoadingScreen(self)
