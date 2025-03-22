@@ -911,61 +911,76 @@ class InfiniteOracleGUI(tk.Tk):
 
         threading.Thread(target=start_thread, daemon=True).start()
 
-    def stop_oracle(self):
-        def stop_thread():
-            global conversation_history
-            if self.is_running:
-                self.is_running = False
-                self.stop_event.set()
-                if self.generator_thread:
-                    self.generator_thread.join(timeout=1)
-                    self.generator_thread = None
-                if self.tts_thread:
-                    self.tts_thread.join(timeout=1)
-                    self.tts_thread = None
-                if self.playback_thread:
-                    self.playback_thread.join(timeout=1)
-                    self.playback_thread = None
+def stop_oracle(self):
+    def stop_thread():
+        global conversation_history
+        if self.is_running:
+            self.is_running = False
+            self.stop_event.set()
+            
+            # Wait for threads to finish
+            if self.generator_thread:
+                self.generator_thread.join(timeout=1)
+                self.generator_thread = None
+            if self.tts_thread:
+                self.tts_thread.join(timeout=1)
+                self.tts_thread = None
+            
+            # Wait for current playback to finish but clear queue afterward
+            if self.playback_thread:
+                # Wait for current audio to finish with a timeout
+                self.playback_thread.join(timeout=10)  # Increased timeout to ensure playback finishes
+                self.playback_thread = None
+            
+            # Clear queues
+            while not self.wisdom_queue.empty():
+                self.wisdom_queue.get_nowait()
+            while not self.audio_queue.empty():
+                try:
+                    # Get and remove any queued audio files
+                    _, wav_path, _ = self.audio_queue.get_nowait()
+                    if os.path.exists(wav_path):
+                        os.remove(wav_path)
+                except Exception as e:
+                    logger.error(f"Audio queue cleanup error: {e}")
+            
+            if self.session:
+                self.session.close()
+                self.session = None
 
-                while not self.wisdom_queue.empty():
-                    self.wisdom_queue.get_nowait()
-                # Don’t clear audio_queue immediately—let playback finish
-                if self.session:
-                    self.session.close()
-                    self.session = None
+            with history_lock:
+                conversation_history = []
 
-                with history_lock:
-                    conversation_history = []
+            # Reset UI elements
+            self.start_button.config(state=tk.NORMAL)
+            self.send_button.config(state=tk.NORMAL)
+            self.save_button.config(state=tk.NORMAL)
+            self.clear_button.config(state=tk.NORMAL if self.remember_var.get() else tk.DISABLED)
+            self.remember_check.config(state=tk.NORMAL)
+            self.record_button.config(state=tk.NORMAL)
+            self.server_type_menu.config(state=tk.NORMAL)
+            self.server_url_entry.config(state=tk.NORMAL)
+            self.model_entry.config(state=tk.NORMAL)
+            self.tts_url_entry.config(state=tk.NORMAL)
+            self.speaker_id_entry.config(state=tk.NORMAL)
+            self.whisper_server_entry.config(state=tk.NORMAL)
+            self.system_prompt_entry.config(state=tk.NORMAL)
+            self.stop_button.config(state=tk.DISABLED, bg="lightgray")
+            self.pitch_slider.config(state=tk.NORMAL)
+            self.reverb_slider.config(state=tk.NORMAL)
+            self.interval_entry.config(state=tk.NORMAL)
+            self.variation_entry.config(state=tk.NORMAL)
+            self.request_interval_entry.config(state=tk.NORMAL)
+            self.timeout_slider.config(state=tk.NORMAL)
+            self.retries_slider.config(state=tk.NORMAL)
+            server_type = self.server_type_var.get()
+            self.max_tokens_entry.config(state=tk.NORMAL if server_type != "Ollama" else tk.DISABLED, 
+                                       bg="white" if server_type != "Ollama" else "grey")
+            self.start_lock = False
+            self.send_enabled = True
+            self.after(100, self.enable_send_and_start)
 
-                self.start_button.config(state=tk.NORMAL)
-                self.send_button.config(state=tk.NORMAL)
-                self.save_button.config(state=tk.NORMAL)
-                self.clear_button.config(state=tk.NORMAL if self.remember_var.get() else tk.DISABLED)
-                self.remember_check.config(state=tk.NORMAL)
-                self.record_button.config(state=tk.NORMAL)
-                self.server_type_menu.config(state=tk.NORMAL)
-                self.server_url_entry.config(state=tk.NORMAL)
-                self.model_entry.config(state=tk.NORMAL)
-                self.tts_url_entry.config(state=tk.NORMAL)
-                self.speaker_id_entry.config(state=tk.NORMAL)
-                self.whisper_server_entry.config(state=tk.NORMAL)
-                self.system_prompt_entry.config(state=tk.NORMAL)
-                self.stop_button.config(state=tk.DISABLED, bg="lightgray")
-                self.pitch_slider.config(state=tk.NORMAL)
-                self.reverb_slider.config(state=tk.NORMAL)
-                self.interval_entry.config(state=tk.NORMAL)
-                self.variation_entry.config(state=tk.NORMAL)
-                self.request_interval_entry.config(state=tk.NORMAL)
-                self.timeout_slider.config(state=tk.NORMAL)
-                self.retries_slider.config(state=tk.NORMAL)
-                server_type = self.server_type_var.get()
-                self.max_tokens_entry.config(state=tk.NORMAL if server_type != "Ollama" else tk.DISABLED, bg="white" if server_type != "Ollama" else "grey")
-                self.start_lock = False
-                self.send_enabled = True
-                # Delay enabling Listen until playback finishes
-                self.after(100, self.enable_send_and_start)
-
-        threading.Thread(target=stop_thread, daemon=True).start()
+    threading.Thread(target=stop_thread, daemon=True).start()    
 
     def send_prompt_action(self):
         def send_thread():
