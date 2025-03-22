@@ -435,13 +435,17 @@ class InfiniteOracleGUI(tk.Tk):
         except Exception as e:
             logger.error(f"Icon load failed: {e}")
 
-        self.config = load_config()
-        self.server_type_var = tk.StringVar(value="Ollama")
-        self.server_url_var = tk.StringVar(value=self.config["Ollama"]["server_url"])
-        self.model_var = tk.StringVar(value=self.config["Ollama"]["model"])
-        self.tts_url_var = tk.StringVar(value=self.config["Ollama"]["tts_url"])
-        self.speaker_id_var = tk.StringVar(value=self.config["Ollama"]["speaker_id"])
-        self.whisper_server_var = tk.StringVar(value=self.config["Ollama"]["whisper_server"])
+        # Load config directly from file and store as instance variable
+        config = load_config()
+        initial_server_type = "Ollama"  # Default server type
+        self.initial_config = config.get(initial_server_type, {})  # Store as instance variable
+
+        self.server_type_var = tk.StringVar(value=initial_server_type)
+        self.server_url_var = tk.StringVar(value=self.initial_config.get("server_url", DEFAULT_OLLAMA_URL))
+        self.model_var = tk.StringVar(value=self.initial_config.get("model", DEFAULT_OLLAMA_MODEL))
+        self.tts_url_var = tk.StringVar(value=self.initial_config.get("tts_url", DEFAULT_TTS_URL))
+        self.speaker_id_var = tk.StringVar(value=self.initial_config.get("speaker_id", DEFAULT_SPEAKER_ID))
+        self.whisper_server_var = tk.StringVar(value=self.initial_config.get("whisper_server", DEFAULT_WHISPER_SERVER_URL))
         self.session = None
         self.wisdom_queue = queue.Queue(maxsize=10)
         self.audio_queue = queue.Queue(maxsize=10)
@@ -583,31 +587,40 @@ class InfiniteOracleGUI(tk.Tk):
             self.listen_button.config(state=tk.NORMAL)  # Re-enable only if appropriate
 
     def update_from_config(self):
-        self.config = load_config()
+        # Always load fresh config from file
+        config = load_config()  # Fetch the latest from oracle_config.json
         server_type = self.server_type_var.get()
-        config = self.config[server_type]
-        self.server_url_var.set(config["server_url"])
-        self.model_var.set(config["model"])
-        self.tts_url_var.set(config["tts_url"])
-        self.speaker_id_var.set(config["speaker_id"])
-        self.whisper_server_var.set(config["whisper_server"])
-        self.pitch_slider.set(config["pitch"])
-        self.reverb_slider.set(config["reverb"])
+        
+        # Get the specific config for the selected server type
+        server_config = config.get(server_type, {})
+        
+        # Update GUI elements with values from the file
+        self.server_url_var.set(server_config.get("server_url", DEFAULT_OLLAMA_URL if server_type == "Ollama" else DEFAULT_LM_STUDIO_URL))
+        self.model_var.set(server_config.get("model", DEFAULT_OLLAMA_MODEL if server_type == "Ollama" else DEFAULT_LM_STUDIO_MODEL))
+        self.tts_url_var.set(server_config.get("tts_url", DEFAULT_TTS_URL))
+        self.speaker_id_var.set(server_config.get("speaker_id", DEFAULT_SPEAKER_ID))
+        self.whisper_server_var.set(server_config.get("whisper_server", DEFAULT_WHISPER_SERVER_URL))
+        self.pitch_slider.set(server_config.get("pitch", 0))
+        self.reverb_slider.set(server_config.get("reverb", 0))
         self.interval_entry.delete(0, tk.END)
-        self.interval_entry.insert(0, str(config["interval"]))
+        self.interval_entry.insert(0, str(server_config.get("interval", 2.0)))
         self.variation_entry.delete(0, tk.END)
-        self.variation_entry.insert(0, str(config["variation"]))
+        self.variation_entry.insert(0, str(server_config.get("variation", 0)))
         self.request_interval_entry.delete(0, tk.END)
-        self.request_interval_entry.insert(0, str(config["request_interval"]))
-        self.timeout_slider.set(config["timeout"])
-        self.retries_slider.set(config["retries"])
+        self.request_interval_entry.insert(0, str(server_config.get("request_interval", 1.0)))
+        self.timeout_slider.set(server_config.get("timeout", 60))
+        self.retries_slider.set(server_config.get("retries", 0))
+        
+        # Handle max_tokens field (specific to LM Studio)
         if server_type != "Ollama":
             self.max_tokens_entry.delete(0, tk.END)
-            self.max_tokens_entry.insert(0, str(config.get("max_tokens", 300)))
+            self.max_tokens_entry.insert(0, str(server_config.get("max_tokens", 300)))
             self.max_tokens_entry.config(state=tk.NORMAL, bg="white")
         else:
             self.max_tokens_entry.config(state=tk.DISABLED, bg="grey")
+        
         self.url_modified = False
+        logger.debug(f"Loaded config from file for {server_type}: {server_config}")
 
     def resize_image_to_fit(self, image, max_width, max_height):
         original_width, original_height = image.size
@@ -682,14 +695,14 @@ class InfiniteOracleGUI(tk.Tk):
         pitch_frame.pack()
         tk.Label(pitch_frame, text="Pitch Shift (semitones):", bg="#2b2b2b", fg="white").pack()
         self.pitch_slider = tk.Scale(pitch_frame, from_=-12, to=12, orient=tk.HORIZONTAL, length=200)
-        self.pitch_slider.set(self.config["Ollama"]["pitch"])
+        self.pitch_slider.set(self.initial_config.get("pitch", 0))
         self.pitch_slider.pack()
 
         reverb_frame = tk.Frame(effects_frame, bg="#2b2b2b")
         reverb_frame.pack()
         tk.Label(reverb_frame, text="Reverb (0-5):", bg="#2b2b2b", fg="white").pack()
         self.reverb_slider = tk.Scale(reverb_frame, from_=0, to=5, resolution=0.1, orient=tk.HORIZONTAL, length=200)
-        self.reverb_slider.set(self.config["Ollama"]["reverb"])
+        self.reverb_slider.set(self.initial_config.get("reverb", 0))
         self.reverb_slider.pack()
 
         canvas_size = 200
@@ -713,21 +726,21 @@ class InfiniteOracleGUI(tk.Tk):
         timeout_frame.pack(side=tk.LEFT, padx=5)
         tk.Label(timeout_frame, text="Request Timeout (seconds):", bg="#2b2b2b", fg="white").pack()
         self.timeout_slider = tk.Scale(timeout_frame, from_=5, to=120, resolution=1, orient=tk.HORIZONTAL)
-        self.timeout_slider.set(self.config["Ollama"]["timeout"])
+        self.timeout_slider.set(self.initial_config.get("timeout", 60))
         self.timeout_slider.pack()
 
         retries_frame = tk.Frame(slider_frame, bg="#2b2b2b")
         retries_frame.pack(side=tk.LEFT, padx=5)
         tk.Label(retries_frame, text="Request Retries:", bg="#2b2b2b", fg="white").pack()
         self.retries_slider = tk.Scale(retries_frame, from_=0, to=5, resolution=1, orient=tk.HORIZONTAL)
-        self.retries_slider.set(self.config["Ollama"]["retries"])
+        self.retries_slider.set(self.initial_config.get("retries", 0))
         self.retries_slider.pack()
 
         max_tokens_frame = tk.Frame(slider_frame, bg="#2b2b2b")
         max_tokens_frame.pack(side=tk.LEFT, padx=5)
         tk.Label(max_tokens_frame, text="Max Tokens (LM Studio):", bg="#2b2b2b", fg="white").pack()
         self.max_tokens_entry = tk.Entry(max_tokens_frame, width=10)
-        self.max_tokens_entry.insert(0, str(self.config["LM Studio"]["max_tokens"]))
+        self.max_tokens_entry.insert(0, str(self.initial_config.get("max_tokens", 300)))
         self.max_tokens_entry.pack()
         self.max_tokens_entry.config(state=tk.DISABLED if self.server_type_var.get() == "Ollama" else tk.NORMAL)
 
@@ -738,21 +751,21 @@ class InfiniteOracleGUI(tk.Tk):
         interval_frame.pack(side=tk.LEFT, padx=5)
         tk.Label(interval_frame, text="Speech Interval (seconds):", bg="#2b2b2b", fg="white").pack()
         self.interval_entry = tk.Entry(interval_frame, width=10)
-        self.interval_entry.insert(0, str(self.config["Ollama"]["interval"]))
+        self.interval_entry.insert(0, str(self.initial_config.get("interval", 2.0)))
         self.interval_entry.pack()
 
         variation_frame = tk.Frame(start_mode_frame, bg="#2b2b2b")
         variation_frame.pack(side=tk.LEFT, padx=5)
         tk.Label(variation_frame, text="Speech Interval Variation (seconds):", bg="#2b2b2b", fg="white").pack()
         self.variation_entry = tk.Entry(variation_frame, width=10)
-        self.variation_entry.insert(0, str(self.config["Ollama"]["variation"]))
+        self.variation_entry.insert(0, str(self.initial_config.get("variation", 0)))
         self.variation_entry.pack()
 
         request_interval_frame = tk.Frame(start_mode_frame, bg="#2b2b2b")
         request_interval_frame.pack(side=tk.LEFT, padx=5)
         tk.Label(request_interval_frame, text="Request Interval (seconds):", bg="#2b2b2b", fg="white").pack()
         self.request_interval_entry = tk.Entry(request_interval_frame, width=10)
-        self.request_interval_entry.insert(0, str(self.config["Ollama"]["request_interval"]))
+        self.request_interval_entry.insert(0, str(self.initial_config.get("request_interval", 1.0)))
         self.request_interval_entry.pack()
 
         button_frame = tk.Frame(right_frame, bg="#2b2b2b")
