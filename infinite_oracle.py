@@ -193,8 +193,8 @@ def apply_reverb(audio, reverb_value):
     if reverb_value <= 0:  # Ensure no reverb when value is 0 or less
         return audio
     reverb_factor = reverb_value / 5.0
-    delay_ms = 50 + (reverb_factor * 10)  # Your updated value
-    gain_db = -20 + (reverb_factor * 4)  # Your updated value
+    delay_ms = 50 + (reverb_factor * 5)  # Your updated value
+    gain_db = -35 + (reverb_factor * 4)  # Your updated value
     echo = audio[:].fade_in(10).fade_out(50)
     echo = echo - abs(gain_db)
     silence = AudioSegment.silent(duration=int(delay_ms))
