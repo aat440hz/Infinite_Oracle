@@ -31,6 +31,7 @@ DEFAULT_LM_STUDIO_MODEL = "qwen2.5-1.5b-instruct"
 DEFAULT_TTS_URL = "http://localhost:5002/api/tts"
 DEFAULT_SPEAKER_ID = "p267"
 DEFAULT_WHISPER_SERVER_URL = "http://localhost:9000"
+DEFAULT_NUM_CTX = 100  # Default context window size for Ollama
 
 # Configuration file
 CONFIG_FILE = "oracle_config.json"
@@ -83,7 +84,9 @@ def ping_server(server_url, server_type, model, timeout, retries):
             "messages": [{"role": "user", "content": "test"}],
             "stream": False
         }
-        if server_type != "Ollama":
+        if server_type == "Ollama":
+            payload["options"] = {"num_ctx": DEFAULT_NUM_CTX}
+        else:
             payload["max_tokens"] = 10
             payload["temperature"] = 0.7
         response = session.post(server_url, json=payload, timeout=timeout)
@@ -108,7 +111,9 @@ def generate_wisdom(gui, wisdom_queue, model, get_server_type_func, stop_event, 
             "messages": messages,
             "stream": False
         }
-        if server_type != "Ollama":
+        if server_type == "Ollama":
+            payload["options"] = {"num_ctx": int(gui.num_ctx_entry.get())}
+        else:
             payload["max_tokens"] = int(gui.max_tokens_entry.get())
             payload["temperature"] = 0.7
         
@@ -138,6 +143,7 @@ def generate_wisdom(gui, wisdom_queue, model, get_server_type_func, stop_event, 
         if not stop_event.is_set():
             time.sleep(get_request_interval_func())
 
+# [Text-to-speech and audio processing functions remain unchanged]
 def text_to_speech(wisdom_queue, audio_queue, get_speaker_id_func, pitch_func, stop_event, get_tts_url_func):
     while not stop_event.is_set():
         try:
@@ -323,7 +329,8 @@ def load_config():
             "variation": 0,
             "request_interval": 1.0,
             "timeout": 60,
-            "retries": 0
+            "retries": 0,
+            "num_ctx": DEFAULT_NUM_CTX
         },
         "LM Studio": {
             "server_type": "LM Studio",
@@ -339,7 +346,7 @@ def load_config():
             "request_interval": 1.0,
             "timeout": 60,
             "retries": 0,
-            "max_tokens": 300
+            "max_tokens": 100
         }
     }
     if os.path.exists(CONFIG_FILE):
@@ -369,7 +376,9 @@ def save_config(gui):
         "timeout": gui.timeout_slider.get(),
         "retries": gui.retries_slider.get()
     }
-    if server_type != "Ollama":
+    if server_type == "Ollama":
+        config[server_type]["num_ctx"] = int(gui.num_ctx_entry.get())
+    else:
         config[server_type]["max_tokens"] = int(gui.max_tokens_entry.get())
     with open(CONFIG_FILE, 'w') as f:
         json.dump(config, f, indent=4)
@@ -574,13 +583,14 @@ class InfiniteOracleGUI(tk.Tk):
         right_frame = tk.Frame(self, bg="#2b2b2b")
         right_frame.grid(row=0, column=1, sticky="nsew", padx=10, pady=10)
         right_frame.columnconfigure(0, weight=1)
-        right_frame.rowconfigure(5, weight=1)
+        right_frame.rowconfigure(5, weight=1)  # Adjusted back since we're moving the context field
 
         slider_frame = tk.Frame(right_frame, bg="#2b2b2b")
         slider_frame.grid(row=0, column=0, sticky="ew")
         slider_frame.columnconfigure(0, weight=1)
         slider_frame.columnconfigure(1, weight=1)
         slider_frame.columnconfigure(2, weight=1)
+        slider_frame.columnconfigure(3, weight=1)  # Added extra column for num_ctx
 
         tk.Label(slider_frame, text="Request Timeout (seconds):", bg="#2b2b2b", fg="white").grid(row=0, column=0, pady=2, sticky="w")
         self.timeout_slider = tk.Scale(slider_frame, from_=5, to=120, resolution=1, orient=tk.HORIZONTAL)
@@ -592,10 +602,16 @@ class InfiniteOracleGUI(tk.Tk):
         self.retries_slider.set(self.initial_config.get("retries", 0))
         self.retries_slider.grid(row=1, column=1, padx=10, pady=2, sticky="ew")
 
-        tk.Label(slider_frame, text="Max Tokens (LM Studio):", bg="#2b2b2b", fg="white").grid(row=0, column=2, pady=2, sticky="w")
+        tk.Label(slider_frame, text="Context Size (Ollama):", bg="#2b2b2b", fg="white").grid(row=0, column=2, pady=2, sticky="w")
+        self.num_ctx_entry = tk.Entry(slider_frame)
+        self.num_ctx_entry.insert(0, str(self.initial_config.get("num_ctx", DEFAULT_NUM_CTX)))
+        self.num_ctx_entry.grid(row=1, column=2, padx=10, pady=2, sticky="ew")
+        self.num_ctx_entry.config(state=tk.NORMAL if self.server_type_var.get() == "Ollama" else tk.DISABLED)
+
+        tk.Label(slider_frame, text="Max Tokens (LM Studio):", bg="#2b2b2b", fg="white").grid(row=0, column=3, pady=2, sticky="w")
         self.max_tokens_entry = tk.Entry(slider_frame)
         self.max_tokens_entry.insert(0, str(self.initial_config.get("max_tokens", 300)))
-        self.max_tokens_entry.grid(row=1, column=2, padx=10, pady=2, sticky="ew")
+        self.max_tokens_entry.grid(row=1, column=3, padx=10, pady=2, sticky="ew")
         self.max_tokens_entry.config(state=tk.DISABLED if self.server_type_var.get() == "Ollama" else tk.NORMAL)
 
         start_mode_frame = tk.LabelFrame(right_frame, text="Start Mode Settings", bg="#2b2b2b", fg="white", padx=5, pady=5)
@@ -733,7 +749,7 @@ class InfiniteOracleGUI(tk.Tk):
     def stop_spinning(self):
         self.is_audio_playing = False
         if not self.start_lock and self.send_enabled and not self.is_running:
-            self.after(100, self.enable_send_and_start)  # Delay to ensure state consistency
+            self.after(100, self.enable_send_and_start)
 
     def update_from_config(self):
         config = load_config()
@@ -754,12 +770,16 @@ class InfiniteOracleGUI(tk.Tk):
         self.request_interval_entry.insert(0, str(server_config.get("request_interval", 1.0)))
         self.timeout_slider.set(server_config.get("timeout", 60))
         self.retries_slider.set(server_config.get("retries", 0))
-        if server_type != "Ollama":
+        if server_type == "Ollama":
+            self.num_ctx_entry.delete(0, tk.END)
+            self.num_ctx_entry.insert(0, str(server_config.get("num_ctx", DEFAULT_NUM_CTX)))
+            self.num_ctx_entry.config(state=tk.NORMAL, bg="white")
+            self.max_tokens_entry.config(state=tk.DISABLED, bg="grey")
+        else:
             self.max_tokens_entry.delete(0, tk.END)
             self.max_tokens_entry.insert(0, str(server_config.get("max_tokens", 300)))
             self.max_tokens_entry.config(state=tk.NORMAL, bg="white")
-        else:
-            self.max_tokens_entry.config(state=tk.DISABLED, bg="grey")
+            self.num_ctx_entry.config(state=tk.DISABLED, bg="grey")
         self.url_modified = False
         logger.debug(f"Loaded config from file for {server_type}: {server_config}")
 
@@ -803,12 +823,12 @@ class InfiniteOracleGUI(tk.Tk):
         self.timeout_slider.config(state=tk.DISABLED)
         self.retries_slider.config(state=tk.DISABLED)
         self.max_tokens_entry.config(state=tk.DISABLED, bg="grey")
+        self.num_ctx_entry.config(state=tk.DISABLED, bg="grey")
 
     def enable_send_and_start(self):
         if not self.is_running and not self.start_lock:
             self.send_button.config(state=tk.NORMAL)
             self.start_button.config(state=tk.NORMAL)
-            # Only enable Listen if no audio is playing or queued in either mode
             if not self.is_audio_playing and self.audio_queue.empty() and self.send_audio_queue.empty():
                 self.listen_button.config(state=tk.NORMAL)
             else:
@@ -816,7 +836,7 @@ class InfiniteOracleGUI(tk.Tk):
             self.save_button.config(state=tk.NORMAL)
             self.clear_button.config(state=tk.NORMAL if self.remember_var.get() else tk.DISABLED)
             self.remember_check.config(state=tk.NORMAL)
-            self.record_button.config(state=tk.NORMAL)
+            self.record_button.config(state=tk.NORMAL)  # Fixed syntax error
             self.server_type_menu.config(state=tk.NORMAL)
             self.server_url_entry.config(state=tk.NORMAL)
             self.model_entry.config(state=tk.NORMAL)
@@ -832,7 +852,10 @@ class InfiniteOracleGUI(tk.Tk):
             self.timeout_slider.config(state=tk.NORMAL)
             self.retries_slider.config(state=tk.NORMAL)
             server_type = self.server_type_var.get()
-            self.max_tokens_entry.config(state=tk.NORMAL if server_type != "Ollama" else tk.DISABLED, bg="white" if server_type != "Ollama" else "grey")
+            self.max_tokens_entry.config(state=tk.NORMAL if server_type != "Ollama" else tk.DISABLED, 
+                                      bg="white" if server_type != "Ollama" else "grey")
+            self.num_ctx_entry.config(state=tk.NORMAL if server_type == "Ollama" else tk.DISABLED,
+                                    bg="white" if server_type == "Ollama" else "grey")
             self.send_enabled = True
 
     def save_config_action(self):
@@ -863,8 +886,12 @@ class InfiniteOracleGUI(tk.Tk):
                 interval = float(self.interval_entry.get())
                 variation = float(self.variation_entry.get())
                 request_interval = float(self.request_interval_entry.get())
+                if server_type == "Ollama":
+                    num_ctx = int(self.num_ctx_entry.get())
+                else:
+                    max_tokens = int(self.max_tokens_entry.get())
             except ValueError:
-                messagebox.showerror("Input Error", "Interval, Variation, and Request Interval must be numeric.")
+                messagebox.showerror("Input Error", "Interval, Variation, Request Interval, and Context Size/Max Tokens must be numeric.")
                 self.start_lock = False
                 self.after(0, self.enable_send_and_start)
                 return
@@ -911,76 +938,72 @@ class InfiniteOracleGUI(tk.Tk):
 
         threading.Thread(target=start_thread, daemon=True).start()
 
-def stop_oracle(self):
-    def stop_thread():
-        global conversation_history
-        if self.is_running:
-            self.is_running = False
-            self.stop_event.set()
-            
-            # Wait for threads to finish
-            if self.generator_thread:
-                self.generator_thread.join(timeout=1)
-                self.generator_thread = None
-            if self.tts_thread:
-                self.tts_thread.join(timeout=1)
-                self.tts_thread = None
-            
-            # Wait for current playback to finish but clear queue afterward
-            if self.playback_thread:
-                # Wait for current audio to finish with a timeout
-                self.playback_thread.join(timeout=10)  # Increased timeout to ensure playback finishes
-                self.playback_thread = None
-            
-            # Clear queues
-            while not self.wisdom_queue.empty():
-                self.wisdom_queue.get_nowait()
-            while not self.audio_queue.empty():
-                try:
-                    # Get and remove any queued audio files
-                    _, wav_path, _ = self.audio_queue.get_nowait()
-                    if os.path.exists(wav_path):
-                        os.remove(wav_path)
-                except Exception as e:
-                    logger.error(f"Audio queue cleanup error: {e}")
-            
-            if self.session:
-                self.session.close()
-                self.session = None
+    def stop_oracle(self):
+        def stop_thread():
+            global conversation_history
+            if self.is_running:
+                self.is_running = False
+                self.stop_event.set()
+                
+                if self.generator_thread:
+                    self.generator_thread.join(timeout=1)
+                    self.generator_thread = None
+                if self.tts_thread:
+                    self.tts_thread.join(timeout=1)
+                    self.tts_thread = None
+                
+                if self.playback_thread:
+                    self.playback_thread.join(timeout=10)
+                    self.playback_thread = None
+                
+                while not self.wisdom_queue.empty():
+                    self.wisdom_queue.get_nowait()
+                while not self.audio_queue.empty():
+                    try:
+                        _, wav_path, _ = self.audio_queue.get_nowait()
+                        if os.path.exists(wav_path):
+                            os.remove(wav_path)
+                    except Exception as e:
+                        logger.error(f"Audio queue cleanup error: {e}")
+                
+                if self.session:
+                    self.session.close()
+                    self.session = None
 
-            with history_lock:
-                conversation_history = []
+                with history_lock:
+                    conversation_history = []
 
-            # Reset UI elements
-            self.start_button.config(state=tk.NORMAL)
-            self.send_button.config(state=tk.NORMAL)
-            self.save_button.config(state=tk.NORMAL)
-            self.clear_button.config(state=tk.NORMAL if self.remember_var.get() else tk.DISABLED)
-            self.remember_check.config(state=tk.NORMAL)
-            self.record_button.config(state=tk.NORMAL)
-            self.server_type_menu.config(state=tk.NORMAL)
-            self.server_url_entry.config(state=tk.NORMAL)
-            self.model_entry.config(state=tk.NORMAL)
-            self.tts_url_entry.config(state=tk.NORMAL)
-            self.speaker_id_entry.config(state=tk.NORMAL)
-            self.whisper_server_entry.config(state=tk.NORMAL)
-            self.system_prompt_entry.config(state=tk.NORMAL)
-            self.stop_button.config(state=tk.DISABLED, bg="lightgray")
-            self.pitch_slider.config(state=tk.NORMAL)
-            self.reverb_slider.config(state=tk.NORMAL)
-            self.interval_entry.config(state=tk.NORMAL)
-            self.variation_entry.config(state=tk.NORMAL)
-            self.request_interval_entry.config(state=tk.NORMAL)
-            self.timeout_slider.config(state=tk.NORMAL)
-            self.retries_slider.config(state=tk.NORMAL)
-            server_type = self.server_type_var.get()
-            self.max_tokens_entry.config(state=tk.NORMAL if server_type != "Ollama" else tk.DISABLED, 
-                                       bg="white" if server_type != "Ollama" else "grey")
-            self.start_lock = False
-            self.send_enabled = True
-            self.after(100, self.enable_send_and_start)
+                self.start_button.config(state=tk.NORMAL)
+                self.send_button.config(state=tk.NORMAL)
+                self.save_button.config(state=tk.NORMAL)
+                self.clear_button.config(state=tk.NORMAL if self.remember_var.get() else tk.DISABLED)
+                self.remember_check.config(state=tk.NORMAL)
+                self.record_button.config(state=tk.NORMAL)
+                self.server_type_menu.config(state=tk.NORMAL)
+                self.server_url_entry.config(state=tk.NORMAL)
+                self.model_entry.config(state=tk.NORMAL)
+                self.tts_url_entry.config(state=tk.NORMAL)
+                self.speaker_id_entry.config(state=tk.NORMAL)
+                self.whisper_server_entry.config(state=tk.NORMAL)
+                self.system_prompt_entry.config(state=tk.NORMAL)
+                self.stop_button.config(state=tk.DISABLED, bg="lightgray")
+                self.pitch_slider.config(state=tk.NORMAL)
+                self.reverb_slider.config(state=tk.NORMAL)
+                self.interval_entry.config(state=tk.NORMAL)
+                self.variation_entry.config(state=tk.NORMAL)
+                self.request_interval_entry.config(state=tk.NORMAL)
+                self.timeout_slider.config(state=tk.NORMAL)
+                self.retries_slider.config(state=tk.NORMAL)
+                server_type = self.server_type_var.get()
+                self.max_tokens_entry.config(state=tk.NORMAL if server_type != "Ollama" else tk.DISABLED, 
+                                           bg="white" if server_type != "Ollama" else "grey")
+                self.num_ctx_entry.config(state=tk.NORMAL if server_type == "Ollama" else tk.DISABLED,
+                                        bg="white" if server_type == "Ollama" else "grey")
+                self.start_lock = False
+                self.send_enabled = True
+                self.after(100, self.enable_send_and_start)
 
-    threading.Thread(target=stop_thread, daemon=True).start()    
+        threading.Thread(target=stop_thread, daemon=True).start()
 
     def send_prompt_action(self):
         def send_thread():
@@ -1043,7 +1066,9 @@ def stop_oracle(self):
                 "messages": messages,
                 "stream": False
             }
-            if server_type != "Ollama":
+            if server_type == "Ollama":
+                payload["options"] = {"num_ctx": int(self.num_ctx_entry.get())}
+            else:
                 payload["max_tokens"] = int(self.max_tokens_entry.get())
                 payload["temperature"] = 0.7
 
