@@ -203,18 +203,25 @@ def apply_reverb(audio, reverb_value):
 def pitch_shift_with_librosa(audio_segment, semitones):
     samples = np.array(audio_segment.get_array_of_samples())
     sample_rate = audio_segment.frame_rate
-    shifted_samples = librosa.effects.pitch_shift(samples.astype(float), sr=sample_rate, n_steps=semitones)
+    # Force mono processing to avoid stereo artifacts
+    if audio_segment.channels > 1:
+        samples = np.mean(samples.reshape(-1, audio_segment.channels), axis=1)
+    shifted_samples = librosa.effects.pitch_shift(
+        samples.astype(float), 
+        sr=sample_rate, 
+        n_steps=semitones, 
+        bins_per_octave=12,  # Standard tuning
+        res_type='kaiser_fast'  # Faster, fewer artifacts
+    )
     return AudioSegment(
         shifted_samples.astype(np.int16).tobytes(),
         frame_rate=sample_rate,
         sample_width=audio_segment.sample_width,
-        channels=audio_segment.channels
+        channels=1  # Ensure mono output
     )
 
 def play_audio(audio_queue, stop_event, get_interval_func, get_variation_func, gui, duration_queue=None, is_start_mode=False):
-    if getattr(sys, 'frozen', False):
-        ffmpeg_path = os.path.join(sys._MEIPASS, "ffmpeg", "ffmpeg.exe")
-        AudioSegment.converter = ffmpeg_path
+    logger.debug("Using default audio backend (no FFmpeg specified)")
     while not stop_event.is_set():
         try:
             logger.debug("Waiting for audio in playback thread")
@@ -229,17 +236,16 @@ def play_audio(audio_queue, stop_event, get_interval_func, get_variation_func, g
                         duration_queue.put(duration_seconds)
 
                     if pitch != 0:
-                        audio = pitch_shift_with_librosa(audio, pitch)
+                        octaves = pitch / 12.0
+                        new_sample_rate = int(audio.frame_rate * (2.0 ** octaves))
+                        audio = audio._spawn(audio.raw_data, overrides={"frame_rate": new_sample_rate})
+                        audio = audio.set_frame_rate(44100)  # Use 44.1 kHz for better quality
 
                     reverb_value = gui.reverb_slider.get()
                     if reverb_value > 0:
                         audio = apply_reverb(audio, reverb_value)
 
-                    # Normalize the audio first to balance levels
                     audio = normalize(audio)
-                    # Apply a gain increase (e.g., +10 dB) to boost volume
-                    audio = audio + 5  # Adjust this value as needed (e.g., +5 to +15 dB)
-
                     gui.start_spinning(len(audio) / 1000.0)
                     play(audio)
                     gui.stop_spinning()
