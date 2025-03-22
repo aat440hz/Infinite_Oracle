@@ -435,10 +435,9 @@ class InfiniteOracleGUI(tk.Tk):
         except Exception as e:
             logger.error(f"Icon load failed: {e}")
 
-        # Load config directly from file and store as instance variable
         config = load_config()
-        initial_server_type = "Ollama"  # Default server type
-        self.initial_config = config.get(initial_server_type, {})  # Store as instance variable
+        initial_server_type = "Ollama"
+        self.initial_config = config.get(initial_server_type, {})
 
         self.server_type_var = tk.StringVar(value=initial_server_type)
         self.server_url_var = tk.StringVar(value=self.initial_config.get("server_url", DEFAULT_OLLAMA_URL))
@@ -499,6 +498,161 @@ class InfiniteOracleGUI(tk.Tk):
         self.animation_thread = threading.Thread(target=self.run_animations, daemon=True)
         self.animation_thread.start()
 
+    def create_widgets(self):
+        self.configure(bg="#2b2b2b")
+
+        # Main window: two columns (left and right)
+        self.columnconfigure(0, weight=1)
+        self.columnconfigure(1, weight=1)
+        self.rowconfigure(0, weight=1)
+
+        # Left Frame: All widgets in a single column
+        self.left_frame = tk.Frame(self, bg="#2b2b2b")
+        self.left_frame.grid(row=0, column=0, sticky="nsew", padx=10, pady=10)
+        self.left_frame.columnconfigure(0, weight=1)
+        self.left_frame.rowconfigure(17, weight=1)  # Canvas frame row expands vertically
+
+        tk.Label(self.left_frame, text="Server Type:", bg="#2b2b2b", fg="white").grid(row=0, column=0, pady=2, sticky="w")
+        self.server_type_menu = tk.OptionMenu(self.left_frame, self.server_type_var, "Ollama", "LM Studio")
+        self.server_type_menu.grid(row=1, column=0, pady=2, sticky="ew")
+
+        tk.Label(self.left_frame, text="Server URL:", bg="#2b2b2b", fg="white").grid(row=2, column=0, pady=2, sticky="w")
+        self.server_url_entry = tk.Entry(self.left_frame, textvariable=self.server_url_var)
+        self.server_url_entry.grid(row=3, column=0, pady=2, sticky="ew")
+        self.server_url_entry.bind("<KeyRelease>", lambda e: setattr(self, 'url_modified', True))
+
+        tk.Label(self.left_frame, text="Model Name:", bg="#2b2b2b", fg="white").grid(row=4, column=0, pady=2, sticky="w")
+        self.model_entry = tk.Entry(self.left_frame, textvariable=self.model_var)
+        self.model_entry.grid(row=5, column=0, pady=2, sticky="ew")
+
+        tk.Label(self.left_frame, text="Coqui TTS Server URL:", bg="#2b2b2b", fg="white").grid(row=6, column=0, pady=2, sticky="w")
+        self.tts_url_entry = tk.Entry(self.left_frame, textvariable=self.tts_url_var)
+        self.tts_url_entry.grid(row=7, column=0, pady=2, sticky="ew")
+
+        tk.Label(self.left_frame, text="Speaker ID (e.g., p267):", bg="#2b2b2b", fg="white").grid(row=8, column=0, pady=2, sticky="w")
+        self.speaker_id_entry = tk.Entry(self.left_frame, textvariable=self.speaker_id_var)
+        self.speaker_id_entry.grid(row=9, column=0, pady=2, sticky="ew")
+
+        tk.Label(self.left_frame, text="Whisper Server URL:", bg="#2b2b2b", fg="white").grid(row=10, column=0, pady=2, sticky="w")
+        self.whisper_server_entry = tk.Entry(self.left_frame, textvariable=self.whisper_server_var)
+        self.whisper_server_entry.grid(row=11, column=0, pady=2, sticky="ew")
+
+        tk.Label(self.left_frame, text="System Prompt:", bg="#2b2b2b", fg="white").grid(row=12, column=0, pady=2, sticky="w")
+        self.system_prompt_entry = tk.Text(self.left_frame, height=5)
+        self.system_prompt_entry.insert(tk.END, SYSTEM_PROMPT)
+        self.system_prompt_entry.grid(row=13, column=0, pady=2, sticky="nsew")
+        self.left_frame.rowconfigure(13, weight=1)  # Prompt expands vertically
+        self.send_button = tk.Button(self.left_frame, text="Send", command=self.send_prompt_action)
+        self.send_button.grid(row=14, column=0, pady=2, sticky="ew")
+
+        self.listen_button = tk.Button(self.left_frame, text="Listen", command=self.start_listening)
+        self.listen_button.grid(row=15, column=0, pady=2, sticky="ew")
+
+        effects_frame = tk.LabelFrame(self.left_frame, text="Effects", bg="#2b2b2b", fg="white", padx=5, pady=5)
+        effects_frame.grid(row=16, column=0, pady=2, sticky="ew")
+        effects_frame.columnconfigure(0, weight=1)
+
+        tk.Label(effects_frame, text="Pitch Shift (semitones):", bg="#2b2b2b", fg="white").grid(row=0, column=0, pady=2, sticky="w")
+        self.pitch_slider = tk.Scale(effects_frame, from_=-12, to=12, orient=tk.HORIZONTAL)
+        self.pitch_slider.set(self.initial_config.get("pitch", 0))
+        self.pitch_slider.grid(row=1, column=0, pady=2, sticky="ew")
+
+        tk.Label(effects_frame, text="Reverb (0-5):", bg="#2b2b2b", fg="white").grid(row=2, column=0, pady=2, sticky="w")
+        self.reverb_slider = tk.Scale(effects_frame, from_=0, to=5, resolution=0.1, orient=tk.HORIZONTAL)
+        self.reverb_slider.set(self.initial_config.get("reverb", 0))
+        self.reverb_slider.grid(row=3, column=0, pady=2, sticky="ew")
+
+        # New frame for centered canvas
+        canvas_frame = tk.Frame(self.left_frame, bg="#2b2b2b")
+        canvas_frame.grid(row=17, column=0, sticky="nsew")
+        canvas_frame.columnconfigure(0, weight=1)
+        canvas_frame.rowconfigure(0, weight=1)
+
+        canvas_size = 200
+        self.image_canvas = tk.Canvas(canvas_frame, width=canvas_size, height=canvas_size, bg="#2b2b2b", highlightthickness=0)
+        self.image_canvas.grid(row=0, column=0, pady=10)  # Centered with pady for vertical spacing
+        self.glow_item = self.image_canvas.create_image(canvas_size // 2, canvas_size // 2, image=self.glow_frames[0][0])
+        self.oracle_item = self.image_canvas.create_image(canvas_size // 2, canvas_size // 2, image=self.oracle_frames[0])
+
+        # Right Frame: Stack sliders, buttons, and console
+        right_frame = tk.Frame(self, bg="#2b2b2b")
+        right_frame.grid(row=0, column=1, sticky="nsew", padx=10, pady=10)
+        right_frame.columnconfigure(0, weight=1)
+        right_frame.rowconfigure(5, weight=1)  # Console row expands vertically
+
+        slider_frame = tk.Frame(right_frame, bg="#2b2b2b")
+        slider_frame.grid(row=0, column=0, sticky="ew")
+        slider_frame.columnconfigure(0, weight=1)
+        slider_frame.columnconfigure(1, weight=1)
+        slider_frame.columnconfigure(2, weight=1)
+
+        tk.Label(slider_frame, text="Request Timeout (seconds):", bg="#2b2b2b", fg="white").grid(row=0, column=0, pady=2, sticky="w")
+        self.timeout_slider = tk.Scale(slider_frame, from_=5, to=120, resolution=1, orient=tk.HORIZONTAL)
+        self.timeout_slider.set(self.initial_config.get("timeout", 60))
+        self.timeout_slider.grid(row=1, column=0, padx=10, pady=2, sticky="ew")
+
+        tk.Label(slider_frame, text="Request Retries:", bg="#2b2b2b", fg="white").grid(row=0, column=1, pady=2, sticky="w")
+        self.retries_slider = tk.Scale(slider_frame, from_=0, to=5, resolution=1, orient=tk.HORIZONTAL)
+        self.retries_slider.set(self.initial_config.get("retries", 0))
+        self.retries_slider.grid(row=1, column=1, padx=10, pady=2, sticky="ew")
+
+        tk.Label(slider_frame, text="Max Tokens (LM Studio):", bg="#2b2b2b", fg="white").grid(row=0, column=2, pady=2, sticky="w")
+        self.max_tokens_entry = tk.Entry(slider_frame)
+        self.max_tokens_entry.insert(0, str(self.initial_config.get("max_tokens", 300)))
+        self.max_tokens_entry.grid(row=1, column=2, padx=10, pady=2, sticky="ew")
+        self.max_tokens_entry.config(state=tk.DISABLED if self.server_type_var.get() == "Ollama" else tk.NORMAL)
+
+        start_mode_frame = tk.LabelFrame(right_frame, text="Start Mode Settings", bg="#2b2b2b", fg="white", padx=5, pady=5)
+        start_mode_frame.grid(row=1, column=0, sticky="ew")
+        start_mode_frame.columnconfigure(0, weight=1)
+        start_mode_frame.columnconfigure(1, weight=1)
+        start_mode_frame.columnconfigure(2, weight=1)
+
+        tk.Label(start_mode_frame, text="Speech Interval (seconds):", bg="#2b2b2b", fg="white").grid(row=0, column=0, pady=2, sticky="w")
+        self.interval_entry = tk.Entry(start_mode_frame)
+        self.interval_entry.insert(0, str(self.initial_config.get("interval", 2.0)))
+        self.interval_entry.grid(row=1, column=0, padx=10, pady=2, sticky="ew")
+
+        tk.Label(start_mode_frame, text="Speech Interval Variation (seconds):", bg="#2b2b2b", fg="white").grid(row=0, column=1, pady=2, sticky="w")
+        self.variation_entry = tk.Entry(start_mode_frame)
+        self.variation_entry.insert(0, str(self.initial_config.get("variation", 0)))
+        self.variation_entry.grid(row=1, column=1, padx=10, pady=2, sticky="ew")
+
+        tk.Label(start_mode_frame, text="Request Interval (seconds):", bg="#2b2b2b", fg="white").grid(row=0, column=2, pady=2, sticky="w")
+        self.request_interval_entry = tk.Entry(start_mode_frame)
+        self.request_interval_entry.insert(0, str(self.initial_config.get("request_interval", 1.0)))
+        self.request_interval_entry.grid(row=1, column=2, padx=10, pady=2, sticky="ew")
+
+        button_frame = tk.Frame(right_frame, bg="#2b2b2b")
+        button_frame.grid(row=2, column=0, sticky="ew")
+        button_frame.columnconfigure(0, weight=1)
+        button_frame.columnconfigure(1, weight=1)
+        button_frame.columnconfigure(2, weight=1)
+        button_frame.columnconfigure(3, weight=1)
+        button_frame.columnconfigure(4, weight=1)
+
+        self.start_button = tk.Button(button_frame, text="Start", command=self.start_oracle)
+        self.start_button.grid(row=0, column=0, padx=5, pady=2, sticky="ew")
+        self.stop_button = tk.Button(button_frame, text="Stop", command=self.stop_oracle, state=tk.DISABLED, bg="lightgray")
+        self.stop_button.grid(row=0, column=1, padx=5, pady=2, sticky="ew")
+        self.save_button = tk.Button(button_frame, text="Save Config", command=self.save_config_action)
+        self.save_button.grid(row=0, column=2, padx=5, pady=2, sticky="ew")
+        self.clear_button = tk.Button(button_frame, text="Clear History", command=self.clear_history)
+        self.clear_button.grid(row=0, column=3, padx=5, pady=2, sticky="ew")
+        self.remember_check = tk.Checkbutton(button_frame, text="Remember", variable=self.remember_var, command=self.toggle_remember, bg="#2b2b2b", fg="white", selectcolor="black")
+        self.remember_check.grid(row=0, column=4, padx=5, pady=2, sticky="ew")
+        self.record_button = tk.Button(button_frame, text="Record", command=self.toggle_record, bg="red", fg="white")
+        self.record_button.grid(row=0, column=5, padx=5, pady=2, sticky="ew")
+
+        console_frame = tk.Frame(right_frame, bg="#2b2b2b")
+        console_frame.grid(row=5, column=0, sticky="nsew")
+        console_frame.columnconfigure(0, weight=1)
+        console_frame.rowconfigure(1, weight=1)
+        tk.Label(console_frame, text="Console Output:", bg="#2b2b2b", fg="white").grid(row=0, column=0, sticky="w")
+        self.console_text = scrolledtext.ScrolledText(console_frame, height=10, state='disabled', bg="black", fg="green")
+        self.console_text.grid(row=1, column=0, sticky="nsew")
+
+    # Rest of the methods remain unchanged...
     def start_tts_threads(self):
         if self.send_tts_thread and self.send_tts_thread.is_alive():
             self.send_stop_event.set()
@@ -579,22 +733,17 @@ class InfiniteOracleGUI(tk.Tk):
 
     def start_spinning(self, duration_seconds):
         self.is_audio_playing = True
-        self.listen_button.config(state=tk.DISABLED)  # Disable Listen button during playback
+        self.listen_button.config(state=tk.DISABLED)
 
     def stop_spinning(self):
         self.is_audio_playing = False
         if not self.start_lock and self.send_enabled and not self.is_running:
-            self.listen_button.config(state=tk.NORMAL)  # Re-enable only if appropriate
+            self.listen_button.config(state=tk.NORMAL)
 
     def update_from_config(self):
-        # Always load fresh config from file
-        config = load_config()  # Fetch the latest from oracle_config.json
+        config = load_config()
         server_type = self.server_type_var.get()
-        
-        # Get the specific config for the selected server type
         server_config = config.get(server_type, {})
-        
-        # Update GUI elements with values from the file
         self.server_url_var.set(server_config.get("server_url", DEFAULT_OLLAMA_URL if server_type == "Ollama" else DEFAULT_LM_STUDIO_URL))
         self.model_var.set(server_config.get("model", DEFAULT_OLLAMA_MODEL if server_type == "Ollama" else DEFAULT_LM_STUDIO_MODEL))
         self.tts_url_var.set(server_config.get("tts_url", DEFAULT_TTS_URL))
@@ -610,15 +759,12 @@ class InfiniteOracleGUI(tk.Tk):
         self.request_interval_entry.insert(0, str(server_config.get("request_interval", 1.0)))
         self.timeout_slider.set(server_config.get("timeout", 60))
         self.retries_slider.set(server_config.get("retries", 0))
-        
-        # Handle max_tokens field (specific to LM Studio)
         if server_type != "Ollama":
             self.max_tokens_entry.delete(0, tk.END)
             self.max_tokens_entry.insert(0, str(server_config.get("max_tokens", 300)))
             self.max_tokens_entry.config(state=tk.NORMAL, bg="white")
         else:
             self.max_tokens_entry.config(state=tk.DISABLED, bg="grey")
-        
         self.url_modified = False
         logger.debug(f"Loaded config from file for {server_type}: {server_config}")
 
@@ -632,162 +778,12 @@ class InfiniteOracleGUI(tk.Tk):
     def update_canvas_size(self, event=None):
         if hasattr(self, 'image_canvas'):
             available_width = self.left_frame.winfo_width() - 20
-            max_size = 300
-            canvas_size = min(available_width, max_size)
-            if canvas_size > 50:
-                self.image_canvas.config(width=canvas_size, height=canvas_size)
-                self.image_canvas.coords(self.glow_item, canvas_size // 2, canvas_size // 2)
-                self.image_canvas.coords(self.oracle_item, canvas_size // 2, canvas_size // 2)
-
-    def create_widgets(self):
-        self.configure(bg="#2b2b2b")
-
-        self.columnconfigure(0, weight=1)
-        self.columnconfigure(1, weight=1)
-        self.rowconfigure(0, weight=0)
-        self.rowconfigure(1, weight=1)
-
-        self.left_frame = tk.Frame(self, bg="#2b2b2b")
-        self.left_frame.grid(row=0, column=0, sticky="nsew", padx=10, pady=10)
-        self.left_frame.bind("<Configure>", self.update_canvas_size)
-
-        tk.Label(self.left_frame, text="Server Type:", bg="#2b2b2b", fg="white").pack(pady=5)
-        self.server_type_menu = tk.OptionMenu(self.left_frame, self.server_type_var, "Ollama", "LM Studio")
-        self.server_type_menu.pack(pady=5)
-
-        tk.Label(self.left_frame, text="Server URL:", bg="#2b2b2b", fg="white").pack(pady=5)
-        self.server_url_entry = tk.Entry(self.left_frame, textvariable=self.server_url_var, width=40)
-        self.server_url_entry.pack(pady=5)
-        self.server_url_entry.bind("<KeyRelease>", lambda e: setattr(self, 'url_modified', True))
-
-        tk.Label(self.left_frame, text="Model Name:", bg="#2b2b2b", fg="white").pack(pady=5)
-        self.model_entry = tk.Entry(self.left_frame, textvariable=self.model_var, width=40)
-        self.model_entry.pack(pady=5)
-
-        tk.Label(self.left_frame, text="Coqui TTS Server URL:", bg="#2b2b2b", fg="white").pack(pady=5)
-        self.tts_url_entry = tk.Entry(self.left_frame, textvariable=self.tts_url_var, width=40)
-        self.tts_url_entry.pack(pady=5)
-
-        tk.Label(self.left_frame, text="Speaker ID (e.g., p267):", bg="#2b2b2b", fg="white").pack(pady=5)
-        self.speaker_id_entry = tk.Entry(self.left_frame, textvariable=self.speaker_id_var, width=40)
-        self.speaker_id_entry.pack(pady=5)
-
-        tk.Label(self.left_frame, text="Whisper Server URL:", bg="#2b2b2b", fg="white").pack(pady=5)
-        self.whisper_server_entry = tk.Entry(self.left_frame, textvariable=self.whisper_server_var, width=40)
-        self.whisper_server_entry.pack(pady=5)
-
-        prompt_frame = tk.Frame(self.left_frame, bg="#2b2b2b")
-        prompt_frame.pack(pady=5, fill=tk.X)
-        tk.Label(prompt_frame, text="System Prompt:", bg="#2b2b2b", fg="white").pack(anchor=tk.W)
-        self.system_prompt_entry = tk.Text(prompt_frame, height=10, width=40)
-        self.system_prompt_entry.insert(tk.END, SYSTEM_PROMPT)
-        self.system_prompt_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
-        self.send_button = tk.Button(prompt_frame, text="Send", command=self.send_prompt_action)
-        self.send_button.pack(side=tk.RIGHT, padx=5)
-
-        self.listen_button = tk.Button(self.left_frame, text="Listen", command=self.start_listening)
-        self.listen_button.pack(pady=5)
-
-        effects_frame = tk.LabelFrame(self.left_frame, text="Effects", bg="#2b2b2b", fg="white", padx=5, pady=5)
-        effects_frame.pack(pady=5, fill=tk.X)
-
-        pitch_frame = tk.Frame(effects_frame, bg="#2b2b2b")
-        pitch_frame.pack()
-        tk.Label(pitch_frame, text="Pitch Shift (semitones):", bg="#2b2b2b", fg="white").pack()
-        self.pitch_slider = tk.Scale(pitch_frame, from_=-12, to=12, orient=tk.HORIZONTAL, length=200)
-        self.pitch_slider.set(self.initial_config.get("pitch", 0))
-        self.pitch_slider.pack()
-
-        reverb_frame = tk.Frame(effects_frame, bg="#2b2b2b")
-        reverb_frame.pack()
-        tk.Label(reverb_frame, text="Reverb (0-5):", bg="#2b2b2b", fg="white").pack()
-        self.reverb_slider = tk.Scale(reverb_frame, from_=0, to=5, resolution=0.1, orient=tk.HORIZONTAL, length=200)
-        self.reverb_slider.set(self.initial_config.get("reverb", 0))
-        self.reverb_slider.pack()
-
-        canvas_size = 200
-        self.image_canvas = tk.Canvas(self.left_frame, width=canvas_size, height=canvas_size, bg="#2b2b2b", highlightthickness=0)
-        self.image_canvas.pack(pady=10, anchor="center")
-        self.glow_item = self.image_canvas.create_image(canvas_size // 2, canvas_size // 2, image=self.glow_frames[0][0])
-        self.oracle_item = self.image_canvas.create_image(canvas_size // 2, canvas_size // 2, image=self.oracle_frames[0])
-
-        right_frame = tk.Frame(self, bg="#2b2b2b")
-        right_frame.grid(row=0, column=1, rowspan=2, sticky="nsew", padx=10, pady=10)
-        right_frame.columnconfigure(0, weight=1)
-        right_frame.rowconfigure(0, weight=0)
-        right_frame.rowconfigure(1, weight=0)
-        right_frame.rowconfigure(2, weight=0)
-        right_frame.rowconfigure(3, weight=1)
-
-        slider_frame = tk.Frame(right_frame, bg="#2b2b2b")
-        slider_frame.grid(row=0, column=0, sticky="ew", pady=5)
-
-        timeout_frame = tk.Frame(slider_frame, bg="#2b2b2b")
-        timeout_frame.pack(side=tk.LEFT, padx=5)
-        tk.Label(timeout_frame, text="Request Timeout (seconds):", bg="#2b2b2b", fg="white").pack()
-        self.timeout_slider = tk.Scale(timeout_frame, from_=5, to=120, resolution=1, orient=tk.HORIZONTAL)
-        self.timeout_slider.set(self.initial_config.get("timeout", 60))
-        self.timeout_slider.pack()
-
-        retries_frame = tk.Frame(slider_frame, bg="#2b2b2b")
-        retries_frame.pack(side=tk.LEFT, padx=5)
-        tk.Label(retries_frame, text="Request Retries:", bg="#2b2b2b", fg="white").pack()
-        self.retries_slider = tk.Scale(retries_frame, from_=0, to=5, resolution=1, orient=tk.HORIZONTAL)
-        self.retries_slider.set(self.initial_config.get("retries", 0))
-        self.retries_slider.pack()
-
-        max_tokens_frame = tk.Frame(slider_frame, bg="#2b2b2b")
-        max_tokens_frame.pack(side=tk.LEFT, padx=5)
-        tk.Label(max_tokens_frame, text="Max Tokens (LM Studio):", bg="#2b2b2b", fg="white").pack()
-        self.max_tokens_entry = tk.Entry(max_tokens_frame, width=10)
-        self.max_tokens_entry.insert(0, str(self.initial_config.get("max_tokens", 300)))
-        self.max_tokens_entry.pack()
-        self.max_tokens_entry.config(state=tk.DISABLED if self.server_type_var.get() == "Ollama" else tk.NORMAL)
-
-        start_mode_frame = tk.LabelFrame(right_frame, text="Start Mode Settings", bg="#2b2b2b", fg="white", padx=5, pady=5)
-        start_mode_frame.grid(row=1, column=0, sticky="ew", pady=5)
-
-        interval_frame = tk.Frame(start_mode_frame, bg="#2b2b2b")
-        interval_frame.pack(side=tk.LEFT, padx=5)
-        tk.Label(interval_frame, text="Speech Interval (seconds):", bg="#2b2b2b", fg="white").pack()
-        self.interval_entry = tk.Entry(interval_frame, width=10)
-        self.interval_entry.insert(0, str(self.initial_config.get("interval", 2.0)))
-        self.interval_entry.pack()
-
-        variation_frame = tk.Frame(start_mode_frame, bg="#2b2b2b")
-        variation_frame.pack(side=tk.LEFT, padx=5)
-        tk.Label(variation_frame, text="Speech Interval Variation (seconds):", bg="#2b2b2b", fg="white").pack()
-        self.variation_entry = tk.Entry(variation_frame, width=10)
-        self.variation_entry.insert(0, str(self.initial_config.get("variation", 0)))
-        self.variation_entry.pack()
-
-        request_interval_frame = tk.Frame(start_mode_frame, bg="#2b2b2b")
-        request_interval_frame.pack(side=tk.LEFT, padx=5)
-        tk.Label(request_interval_frame, text="Request Interval (seconds):", bg="#2b2b2b", fg="white").pack()
-        self.request_interval_entry = tk.Entry(request_interval_frame, width=10)
-        self.request_interval_entry.insert(0, str(self.initial_config.get("request_interval", 1.0)))
-        self.request_interval_entry.pack()
-
-        button_frame = tk.Frame(right_frame, bg="#2b2b2b")
-        button_frame.grid(row=2, column=0, sticky="ew", pady=5)
-        self.start_button = tk.Button(button_frame, text="Start", command=self.start_oracle)
-        self.start_button.pack(side=tk.LEFT, padx=5)
-        self.stop_button = tk.Button(button_frame, text="Stop", command=self.stop_oracle, state=tk.DISABLED, bg="lightgray")
-        self.stop_button.pack(side=tk.LEFT, padx=5)
-        self.save_button = tk.Button(button_frame, text="Save Config", command=self.save_config_action)
-        self.save_button.pack(side=tk.LEFT, padx=5)
-        self.clear_button = tk.Button(button_frame, text="Clear History", command=self.clear_history)
-        self.clear_button.pack(side=tk.LEFT, padx=5)
-        self.remember_check = tk.Checkbutton(button_frame, text="Remember", variable=self.remember_var, command=self.toggle_remember, bg="#2b2b2b", fg="white", selectcolor="black")
-        self.remember_check.pack(side=tk.LEFT, padx=5)
-        self.record_button = tk.Button(button_frame, text="Record", command=self.toggle_record, bg="red", fg="white")
-        self.record_button.pack(side=tk.LEFT, padx=5)
-
-        console_frame = tk.Frame(right_frame, bg="#2b2b2b")
-        console_frame.grid(row=3, column=0, sticky="nsew")
-        tk.Label(console_frame, text="Console Output:", bg="#2b2b2b", fg="white").pack()
-        self.console_text = scrolledtext.ScrolledText(console_frame, height=30, width=60, state='disabled', bg="black", fg="green")
-        self.console_text.pack(fill=tk.BOTH, expand=True)
+            available_height = self.left_frame.winfo_height() - sum(self.left_frame.grid_bbox(row=r, column=0)[3] for r in range(17)) - 20
+            max_size = min(available_width, available_height, 300)
+            if max_size > 50:
+                self.image_canvas.config(width=max_size, height=max_size)
+                self.image_canvas.coords(self.glow_item, max_size // 2, max_size // 2)
+                self.image_canvas.coords(self.oracle_item, max_size // 2, max_size // 2)
 
     def disable_controls(self):
         self.start_button.config(state=tk.DISABLED)
