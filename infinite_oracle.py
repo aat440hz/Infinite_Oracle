@@ -501,16 +501,14 @@ class InfiniteOracleGUI(tk.Tk):
     def create_widgets(self):
         self.configure(bg="#2b2b2b")
 
-        # Main window: two columns (left and right)
         self.columnconfigure(0, weight=1)
         self.columnconfigure(1, weight=1)
         self.rowconfigure(0, weight=1)
 
-        # Left Frame: All widgets in a single column
         self.left_frame = tk.Frame(self, bg="#2b2b2b")
         self.left_frame.grid(row=0, column=0, sticky="nsew", padx=10, pady=10)
         self.left_frame.columnconfigure(0, weight=1)
-        self.left_frame.rowconfigure(17, weight=1)  # Canvas frame row expands vertically
+        self.left_frame.rowconfigure(17, weight=1)
 
         tk.Label(self.left_frame, text="Server Type:", bg="#2b2b2b", fg="white").grid(row=0, column=0, pady=2, sticky="w")
         self.server_type_menu = tk.OptionMenu(self.left_frame, self.server_type_var, "Ollama", "LM Studio")
@@ -541,7 +539,7 @@ class InfiniteOracleGUI(tk.Tk):
         self.system_prompt_entry = tk.Text(self.left_frame, height=5)
         self.system_prompt_entry.insert(tk.END, SYSTEM_PROMPT)
         self.system_prompt_entry.grid(row=13, column=0, pady=2, sticky="nsew")
-        self.left_frame.rowconfigure(13, weight=1)  # Prompt expands vertically
+        self.left_frame.rowconfigure(13, weight=1)
         self.send_button = tk.Button(self.left_frame, text="Send", command=self.send_prompt_action)
         self.send_button.grid(row=14, column=0, pady=2, sticky="ew")
 
@@ -562,7 +560,6 @@ class InfiniteOracleGUI(tk.Tk):
         self.reverb_slider.set(self.initial_config.get("reverb", 0))
         self.reverb_slider.grid(row=3, column=0, pady=2, sticky="ew")
 
-        # New frame for centered canvas
         canvas_frame = tk.Frame(self.left_frame, bg="#2b2b2b")
         canvas_frame.grid(row=17, column=0, sticky="nsew")
         canvas_frame.columnconfigure(0, weight=1)
@@ -570,15 +567,14 @@ class InfiniteOracleGUI(tk.Tk):
 
         canvas_size = 200
         self.image_canvas = tk.Canvas(canvas_frame, width=canvas_size, height=canvas_size, bg="#2b2b2b", highlightthickness=0)
-        self.image_canvas.grid(row=0, column=0, pady=10)  # Centered with pady for vertical spacing
+        self.image_canvas.grid(row=0, column=0, pady=10)
         self.glow_item = self.image_canvas.create_image(canvas_size // 2, canvas_size // 2, image=self.glow_frames[0][0])
         self.oracle_item = self.image_canvas.create_image(canvas_size // 2, canvas_size // 2, image=self.oracle_frames[0])
 
-        # Right Frame: Stack sliders, buttons, and console
         right_frame = tk.Frame(self, bg="#2b2b2b")
         right_frame.grid(row=0, column=1, sticky="nsew", padx=10, pady=10)
         right_frame.columnconfigure(0, weight=1)
-        right_frame.rowconfigure(5, weight=1)  # Console row expands vertically
+        right_frame.rowconfigure(5, weight=1)
 
         slider_frame = tk.Frame(right_frame, bg="#2b2b2b")
         slider_frame.grid(row=0, column=0, sticky="ew")
@@ -652,7 +648,6 @@ class InfiniteOracleGUI(tk.Tk):
         self.console_text = scrolledtext.ScrolledText(console_frame, height=10, state='disabled', bg="black", fg="green")
         self.console_text.grid(row=1, column=0, sticky="nsew")
 
-    # Rest of the methods remain unchanged...
     def start_tts_threads(self):
         if self.send_tts_thread and self.send_tts_thread.is_alive():
             self.send_stop_event.set()
@@ -738,7 +733,7 @@ class InfiniteOracleGUI(tk.Tk):
     def stop_spinning(self):
         self.is_audio_playing = False
         if not self.start_lock and self.send_enabled and not self.is_running:
-            self.listen_button.config(state=tk.NORMAL)
+            self.after(100, self.enable_send_and_start)  # Delay to ensure state consistency
 
     def update_from_config(self):
         config = load_config()
@@ -813,7 +808,11 @@ class InfiniteOracleGUI(tk.Tk):
         if not self.is_running and not self.start_lock:
             self.send_button.config(state=tk.NORMAL)
             self.start_button.config(state=tk.NORMAL)
-            self.listen_button.config(state=tk.NORMAL if not self.is_audio_playing else tk.DISABLED)
+            # Only enable Listen if no audio is playing or queued in either mode
+            if not self.is_audio_playing and self.audio_queue.empty() and self.send_audio_queue.empty():
+                self.listen_button.config(state=tk.NORMAL)
+            else:
+                self.listen_button.config(state=tk.DISABLED)
             self.save_button.config(state=tk.NORMAL)
             self.clear_button.config(state=tk.NORMAL if self.remember_var.get() else tk.DISABLED)
             self.remember_check.config(state=tk.NORMAL)
@@ -930,14 +929,7 @@ class InfiniteOracleGUI(tk.Tk):
 
                 while not self.wisdom_queue.empty():
                     self.wisdom_queue.get_nowait()
-                while not self.audio_queue.empty():
-                    try:
-                        _, wav_path, _ = self.audio_queue.get_nowait()
-                        if os.path.exists(wav_path):
-                            os.remove(wav_path)
-                    except Exception as e:
-                        logger.error(f"Audio queue cleanup error: {e}")
-
+                # Don’t clear audio_queue immediately—let playback finish
                 if self.session:
                     self.session.close()
                     self.session = None
@@ -947,7 +939,6 @@ class InfiniteOracleGUI(tk.Tk):
 
                 self.start_button.config(state=tk.NORMAL)
                 self.send_button.config(state=tk.NORMAL)
-                self.listen_button.config(state=tk.NORMAL)
                 self.save_button.config(state=tk.NORMAL)
                 self.clear_button.config(state=tk.NORMAL if self.remember_var.get() else tk.DISABLED)
                 self.remember_check.config(state=tk.NORMAL)
@@ -971,6 +962,8 @@ class InfiniteOracleGUI(tk.Tk):
                 self.max_tokens_entry.config(state=tk.NORMAL if server_type != "Ollama" else tk.DISABLED, bg="white" if server_type != "Ollama" else "grey")
                 self.start_lock = False
                 self.send_enabled = True
+                # Delay enabling Listen until playback finishes
+                self.after(100, self.enable_send_and_start)
 
         threading.Thread(target=stop_thread, daemon=True).start()
 
