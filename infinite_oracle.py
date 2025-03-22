@@ -190,16 +190,15 @@ def text_to_speech(wisdom_queue, audio_queue, get_speaker_id_func, pitch_func, s
             wisdom_queue.task_done()
 
 def apply_reverb(audio, reverb_value):
-    if reverb_value <= 0:
+    if reverb_value <= 0:  # Ensure no reverb when value is 0 or less
         return audio
     reverb_factor = reverb_value / 5.0
-    delay_ms = 50 + (reverb_factor * 10)
-    gain_db = -20 + (reverb_factor * 4)
+    delay_ms = 50 + (reverb_factor * 10)  # Your updated value
+    gain_db = -20 + (reverb_factor * 4)  # Your updated value
     echo = audio[:].fade_in(10).fade_out(50)
     echo = echo - abs(gain_db)
     silence = AudioSegment.silent(duration=int(delay_ms))
-    reverb_audio = audio.overlay(silence + echo)
-    return reverb_audio
+    return audio.overlay(silence + echo)
 
 def pitch_shift_with_librosa(audio_segment, semitones):
     samples = np.array(audio_segment.get_array_of_samples())
