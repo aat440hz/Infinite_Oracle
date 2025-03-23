@@ -145,6 +145,9 @@ def generate_wisdom(gui, wisdom_queue, model, get_server_type_func, stop_event, 
                     if gui.remember_var.get():
                         conversation_history.append({"role": "user", "content": system_prompt})
                         conversation_history.append({"role": "assistant", "content": wisdom})
+                        # Limit conversation history to 100 messages
+                        if len(conversation_history) > 100:
+                            conversation_history = conversation_history[-100:]  # Keep the last 100 messages
                 logger.debug("Adding wisdom to queue: %s", wisdom)
                 wisdom_queue.put(wisdom)
         except requests.RequestException as e:
@@ -1148,6 +1151,9 @@ class InfiniteOracleGUI(tk.Tk):
                     if self.remember_var.get():
                         conversation_history.append({"role": "user", "content": prompt})
                         conversation_history.append({"role": "assistant", "content": wisdom})
+                        # Limit conversation history to 100 messages
+                        if len(conversation_history) > 100:
+                            conversation_history = conversation_history[-100:]  # Keep the last 100 messages
                 logger.debug("Queueing wisdom: %s", wisdom)
                 wisdom_queue.put(wisdom)
 
