@@ -539,7 +539,7 @@ class InfiniteOracleGUI(tk.Tk):
 
         self.create_widgets()
         sys.stdout = ConsoleRedirector(self.console_text)
-        self.server_type_var.trace("w", lambda *args: self.update_from_config())
+        self.server_type_var.trace("w", lambda *args: (self.stop_oracle(), self.update_from_config()))  # Updated line
 
         self.start_tts_threads()
         self.animation_thread = threading.Thread(target=self.run_animations, daemon=True)
@@ -940,7 +940,10 @@ class InfiniteOracleGUI(tk.Tk):
                 self.after(0, self.enable_send_and_start)
                 return
 
+            # Full stop and reset
             self.stop_oracle()
+            time.sleep(0.5)  # Brief pause to ensure threads terminate
+            self.stop_event = threading.Event()  # Fresh stop event
             self.reset_tts_threads()
 
             success, error_msg = ping_server(server_url, server_type, model, self.timeout_slider.get(), self.retries_slider.get())
@@ -954,6 +957,7 @@ class InfiniteOracleGUI(tk.Tk):
             self.stop_event.clear()
             self.stop_button.config(state=tk.NORMAL, bg="red")
 
+            logger.debug("Starting threads with audio_queue size: %d", self.audio_queue.qsize())
             self.generator_thread = threading.Thread(
                 target=generate_wisdom,
                 args=(self, self.wisdom_queue, model, lambda: self.server_type_var.get(), self.stop_event, lambda: float(self.request_interval_entry.get()), SYSTEM_PROMPT),
@@ -973,6 +977,8 @@ class InfiniteOracleGUI(tk.Tk):
             self.generator_thread.start()
             self.tts_thread.start()
             self.playback_thread.start()
+            logger.debug("Threads started: generator=%s, tts=%s, playback=%s", 
+                        self.generator_thread.is_alive(), self.tts_thread.is_alive(), self.playback_thread.is_alive())
 
         threading.Thread(target=start_thread, daemon=True).start()
 
@@ -983,19 +989,31 @@ class InfiniteOracleGUI(tk.Tk):
                 self.is_running = False
                 self.stop_event.set()
                 
-                if self.generator_thread:
-                    self.generator_thread.join(timeout=1)
+                # Increase join timeouts and log if threads persist
+                if self.generator_thread and self.generator_thread.is_alive():
+                    self.generator_thread.join(timeout=2)
+                    if self.generator_thread.is_alive():
+                        logger.warning("Generator thread did not stop cleanly")
                     self.generator_thread = None
-                if self.tts_thread:
-                    self.tts_thread.join(timeout=1)
+                if self.tts_thread and self.tts_thread.is_alive():
+                    self.tts_thread.join(timeout=2)
+                    if self.tts_thread.is_alive():
+                        logger.warning("TTS thread did not stop cleanly")
                     self.tts_thread = None
                 
-                if self.playback_thread:
-                    self.playback_thread.join(timeout=10)
+                if self.playback_thread and self.playback_thread.is_alive():
+                    self.playback_thread.join(timeout=15)  # Longer timeout for playback
+                    if self.playback_thread.is_alive():
+                        logger.warning("Playback thread did not stop cleanly")
                     self.playback_thread = None
                 
+                # Clear queues with a timeout
+                logger.debug("Clearing queues: wisdom=%d, audio=%d", self.wisdom_queue.qsize(), self.audio_queue.qsize())
                 while not self.wisdom_queue.empty():
-                    self.wisdom_queue.get_nowait()
+                    try:
+                        self.wisdom_queue.get_nowait()
+                    except queue.Empty:
+                        break
                 while not self.audio_queue.empty():
                     try:
                         _, wav_path, _ = self.audio_queue.get_nowait()
@@ -1003,6 +1021,8 @@ class InfiniteOracleGUI(tk.Tk):
                             os.remove(wav_path)
                     except Exception as e:
                         logger.error(f"Audio queue cleanup error: {e}")
+                    except queue.Empty:
+                        break
                 
                 if self.session:
                     self.session.close()
@@ -1011,6 +1031,7 @@ class InfiniteOracleGUI(tk.Tk):
                 with history_lock:
                     conversation_history = []
 
+                # Reset GUI state
                 self.start_button.config(state=tk.NORMAL)
                 self.send_button.config(state=tk.NORMAL)
                 self.save_button.config(state=tk.NORMAL)
@@ -1040,6 +1061,7 @@ class InfiniteOracleGUI(tk.Tk):
                 self.start_lock = False
                 self.send_enabled = True
                 self.after(100, self.enable_send_and_start)
+                logger.debug("Oracle fully stopped and reset")
 
         threading.Thread(target=stop_thread, daemon=True).start()
 
