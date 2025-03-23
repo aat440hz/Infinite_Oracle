@@ -140,16 +140,14 @@ def generate_wisdom(gui, wisdom_queue, model, get_server_type_func, stop_event, 
                 else data.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
             )
             if wisdom and not stop_event.is_set():
-                print(f"The Infinite Oracle speaks: {wisdom}", end="\n\n")
                 with history_lock:
                     if gui.remember_var.get():
                         conversation_history.append({"role": "user", "content": system_prompt})
                         conversation_history.append({"role": "assistant", "content": wisdom})
-                        # Limit conversation history to 100 messages
                         if len(conversation_history) > 100:
-                            conversation_history = conversation_history[-100:]  # Keep the last 100 messages
+                            conversation_history = conversation_history[-100:]
                 logger.debug("Adding wisdom to queue: %s", wisdom)
-                wisdom_queue.put(wisdom)
+                wisdom_queue.put(wisdom)  # No print here
         except requests.RequestException as e:
             logger.error(f"{server_type} connection failed: {str(e)}")
             print(f"{server_type} error: {str(e)}. Next attempt in {get_request_interval_func()}s...")
@@ -244,11 +242,10 @@ def pitch_shift_with_librosa(audio_segment, semitones):
 
 def play_audio(audio_queue, stop_event, get_interval_func, get_variation_func, gui, duration_queue=None, is_start_mode=False):
     logger.debug("Using default audio backend (no FFmpeg specified)")
-    last_playback_end = time.time()  # Track when last playback ended
+    last_playback_end = time.time()
     while not stop_event.is_set():
         try:
             if is_start_mode:
-                # Enforce interval before fetching next audio
                 current_time = time.time()
                 interval = max(0.1, get_interval_func() + random.uniform(-get_variation_func(), get_variation_func()))
                 time_since_last = current_time - last_playback_end
@@ -257,7 +254,6 @@ def play_audio(audio_queue, stop_event, get_interval_func, get_variation_func, g
                     logger.debug(f"Waiting {sleep_time:.2f}s to enforce Speech Interval")
                     time.sleep(sleep_time)
 
-            # Use blocking get() to ensure we don’t miss items
             logger.debug("Waiting for audio in playback thread")
             wisdom, wav_path, pitch = audio_queue.get()  # Blocking call
             logger.debug("Received audio: %s", wav_path)
@@ -282,6 +278,7 @@ def play_audio(audio_queue, stop_event, get_interval_func, get_variation_func, g
 
                     audio = normalize(audio)
                     logger.debug("Playing audio: %s", wav_path)
+                    print(f"The Infinite Oracle speaks: {wisdom}", end="\n\n")  # Print here
                     gui.start_spinning(duration_seconds)
                     play(audio)
                     gui.stop_spinning()
@@ -295,26 +292,15 @@ def play_audio(audio_queue, stop_event, get_interval_func, get_variation_func, g
                         audio.export(filepath, format="wav")
                         print(f"Recorded wisdom to: {filepath}")
 
-                    last_playback_end = time.time()  # Update after playback ends
+                    last_playback_end = time.time()
 
             os.remove(wav_path)
             audio_queue.task_done()
 
-        except queue.Empty:  # This won’t trigger with get(), but kept for safety
+        except queue.Empty:
             time.sleep(0.1)
         except Exception as e:
-            logger.error(f"Playback error: {str(e)}", exc_info=True)  # Log full stack trace
-            if 'wav_path' in locals() and os.path.exists(wav_path):
-                os.remove(wav_path)
-            if not is_start_mode:
-                gui.send_enabled = True
-                gui.start_lock = False
-                gui.after(0, gui.enable_send_and_start)
-
-        except queue.Empty:
-            time.sleep(0.1)  # Wait briefly if queue is empty
-        except Exception as e:
-            logger.error(f"Playback error: {str(e)}")
+            logger.error(f"Playback error: {str(e)}", exc_info=True)
             if 'wav_path' in locals() and os.path.exists(wav_path):
                 os.remove(wav_path)
             if not is_start_mode:
@@ -496,8 +482,8 @@ class InfiniteOracleGUI(tk.Tk):
         self.speaker_id_var = tk.StringVar(value=self.initial_config.get("speaker_id", DEFAULT_SPEAKER_ID))
         self.whisper_server_var = tk.StringVar(value=self.initial_config.get("whisper_server", DEFAULT_WHISPER_SERVER_URL))
         self.session = None
-        self.wisdom_queue = queue.Queue(maxsize=10)
-        self.audio_queue = queue.Queue(maxsize=10)
+        self.wisdom_queue = queue.Queue(maxsize=3)
+        self.audio_queue = queue.Queue(maxsize=3)
         self.duration_queue = queue.Queue(maxsize=1)
         self.is_running = False
         self.start_lock = False
@@ -505,8 +491,8 @@ class InfiniteOracleGUI(tk.Tk):
         self.generator_thread = None
         self.tts_thread = None
         self.playback_thread = None
-        self.send_wisdom_queue = queue.Queue(maxsize=10)
-        self.send_audio_queue = queue.Queue(maxsize=10)
+        self.send_wisdom_queue = queue.Queue(maxsize=3)
+        self.send_audio_queue = queue.Queue(maxsize=3)
         self.send_stop_event = threading.Event()
         self.send_tts_thread = None
         self.send_playback_thread = None
