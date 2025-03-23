@@ -227,37 +227,77 @@ def pitch_shift_with_librosa(audio_segment, semitones):
     )
 
 def play_audio(audio_queue, stop_event, get_interval_func, get_variation_func, gui, duration_queue=None, is_start_mode=False):
-    last_playback_end = time.time()
+    logger.debug("Using default audio backend (no FFmpeg specified)")
+    last_playback_end = time.time()  # Track when last playback ended
     while not stop_event.is_set():
         try:
             if is_start_mode:
+                # Calculate the desired interval for Start Mode
                 current_time = time.time()
                 interval = max(0.1, get_interval_func() + random.uniform(-get_variation_func(), get_variation_func()))
                 time_since_last = current_time - last_playback_end
+                
+                # Wait if the interval hasn't elapsed since last playback
                 if time_since_last < interval:
-                    time.sleep(interval - time_since_last)  # Wait until the full interval elapses
-                
+                    sleep_time = interval - time_since_last
+                    logger.debug(f"Waiting {sleep_time:.2f}s to enforce Speech Interval")
+                    time.sleep(sleep_time)
+
+            # Check queue without blocking
             if audio_queue.empty():
-                time.sleep(0.1)
+                time.sleep(0.1)  # Brief wait if queue is empty
                 continue
-                
+
+            # Fetch and play audio
             wisdom, wav_path, pitch = audio_queue.get_nowait()  # Non-blocking
+            logger.debug("Received audio: %s", wav_path)
             with playback_lock:
                 if not stop_event.is_set():
                     audio = AudioSegment.from_wav(wav_path)
                     duration_seconds = len(audio) / 1000.0
+                    logger.info(f"Audio duration: {duration_seconds} seconds")
+                    if duration_queue and not is_start_mode:
+                        duration_queue.put(duration_seconds)
+
+                    if pitch != 0:
+                        octaves = pitch / 12.0
+                        new_sample_rate = int(audio.frame_rate * (2.0 ** octaves))
+                        audio = audio._spawn(audio.raw_data, overrides={"frame_rate": new_sample_rate})
+                        audio = audio.set_frame_rate(44100)
+
+                    reverb_value = gui.reverb_slider.get()
+                    if reverb_value > 0:
+                        audio = apply_reverb(audio, reverb_value)
+
+                    audio = normalize(audio)
                     gui.start_spinning(duration_seconds)
                     play(audio)
                     gui.stop_spinning()
+
+                    if gui.record_var.get():
+                        recordings_dir = os.path.join(os.path.dirname(sys.executable if getattr(sys, 'frozen', False) else __file__), "OracleRecordings")
+                        os.makedirs(recordings_dir, exist_ok=True)
+                        timestamp = time.strftime("%Y%m%d_%H%M%S")
+                        filename = f"oracle_{timestamp}.wav"
+                        filepath = os.path.join(recordings_dir, filename)
+                        audio.export(filepath, format="wav")
+                        print(f"Recorded wisdom to: {filepath}")
+
                     last_playback_end = time.time()  # Update after playback ends
+
             os.remove(wav_path)
             audio_queue.task_done()
+
         except queue.Empty:
-            time.sleep(0.1)
+            time.sleep(0.1)  # Wait briefly if queue is empty
         except Exception as e:
             logger.error(f"Playback error: {str(e)}")
             if 'wav_path' in locals() and os.path.exists(wav_path):
                 os.remove(wav_path)
+            if not is_start_mode:
+                gui.send_enabled = True
+                gui.start_lock = False
+                gui.after(0, gui.enable_send_and_start)
 
 def capture_audio(duration=5, filename=None):
     CHUNK = 1024
