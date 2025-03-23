@@ -726,6 +726,34 @@ class InfiniteOracleGUI(tk.Tk):
         logger.info("TTS and playback threads restarted for Send mode.")
 
     def reset_tts_threads(self):
+        if self.send_tts_thread and self.send_tts_thread.is_alive():
+            self.send_stop_event.set()
+            self.send_tts_thread.join(timeout=2)  # Increased timeout
+            if self.send_tts_thread.is_alive():
+                logger.warning("Send TTS thread did not stop cleanly")
+        if self.send_playback_thread and self.send_playback_thread.is_alive():
+            self.send_stop_event.set()  # Ensure stop event is set
+            self.send_playback_thread.join(timeout=2)  # Increased timeout
+            if self.send_playback_thread.is_alive():
+                logger.warning("Send playback thread did not stop cleanly")
+
+        # Clear queues thoroughly
+        while not self.send_wisdom_queue.empty():
+            try:
+                self.send_wisdom_queue.get_nowait()
+            except queue.Empty:
+                break
+        while not self.send_audio_queue.empty():
+            try:
+                _, wav_path, _ = self.send_audio_queue.get_nowait()
+                if os.path.exists(wav_path):
+                    os.remove(wav_path)
+            except Exception as e:
+                logger.error(f"Send audio queue cleanup error: {e}")
+            except queue.Empty:
+                break
+
+        self.send_stop_event.clear()
         self.start_tts_threads()
 
     def load_pre_rotated_frames(self, image_path, num_frames):
@@ -1132,16 +1160,14 @@ class InfiniteOracleGUI(tk.Tk):
             logger.debug("Received response: %s", wisdom)
 
             if wisdom:
-                print(f"The Infinite Oracle speaks: {wisdom}", end="\n\n")
                 with history_lock:
                     if self.remember_var.get():
                         conversation_history.append({"role": "user", "content": prompt})
                         conversation_history.append({"role": "assistant", "content": wisdom})
-                        # Limit conversation history to 100 messages
                         if len(conversation_history) > 100:
-                            conversation_history = conversation_history[-100:]  # Keep the last 100 messages
+                            conversation_history = conversation_history[-100:]
                 logger.debug("Queueing wisdom: %s", wisdom)
-                wisdom_queue.put(wisdom)
+                wisdom_queue.put(wisdom)  # Print moved to play_audio
 
                 try:
                     logger.debug("Waiting for TTS audio")
