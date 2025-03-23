@@ -241,11 +241,24 @@ def pitch_shift_with_librosa(audio_segment, semitones):
 
 def play_audio(audio_queue, stop_event, get_interval_func, get_variation_func, gui, duration_queue=None, is_start_mode=False):
     logger.debug("Using default audio backend (no FFmpeg specified)")
+    last_playback_end = time.time()  # Track when last playback ended
     while not stop_event.is_set():
         try:
+            if is_start_mode:
+                # Enforce interval before fetching next audio
+                current_time = time.time()
+                interval = max(0.1, get_interval_func() + random.uniform(-get_variation_func(), get_variation_func()))
+                time_since_last = current_time - last_playback_end
+                if time_since_last < interval:
+                    sleep_time = interval - time_since_last
+                    logger.debug(f"Waiting {sleep_time:.2f}s to enforce Speech Interval")
+                    time.sleep(sleep_time)
+
+            # Use blocking get() to ensure we don’t miss items
             logger.debug("Waiting for audio in playback thread")
-            wisdom, wav_path, pitch = audio_queue.get()
+            wisdom, wav_path, pitch = audio_queue.get()  # Blocking call
             logger.debug("Received audio: %s", wav_path)
+            
             with playback_lock:
                 if not stop_event.is_set():
                     audio = AudioSegment.from_wav(wav_path)
@@ -258,14 +271,15 @@ def play_audio(audio_queue, stop_event, get_interval_func, get_variation_func, g
                         octaves = pitch / 12.0
                         new_sample_rate = int(audio.frame_rate * (2.0 ** octaves))
                         audio = audio._spawn(audio.raw_data, overrides={"frame_rate": new_sample_rate})
-                        audio = audio.set_frame_rate(44100)  # Use 44.1 kHz for better quality
+                        audio = audio.set_frame_rate(44100)
 
                     reverb_value = gui.reverb_slider.get()
                     if reverb_value > 0:
                         audio = apply_reverb(audio, reverb_value)
 
                     audio = normalize(audio)
-                    gui.start_spinning(len(audio) / 1000.0)
+                    logger.debug("Playing audio: %s", wav_path)
+                    gui.start_spinning(duration_seconds)
                     play(audio)
                     gui.stop_spinning()
 
@@ -278,15 +292,15 @@ def play_audio(audio_queue, stop_event, get_interval_func, get_variation_func, g
                         audio.export(filepath, format="wav")
                         print(f"Recorded wisdom to: {filepath}")
 
+                    last_playback_end = time.time()  # Update after playback ends
+
             os.remove(wav_path)
             audio_queue.task_done()
-            interval = max(0.1, get_interval_func() + random.uniform(-get_variation_func(), get_variation_func())) if is_start_mode else 0
-            if not stop_event.is_set():
-                time.sleep(interval)
-        except queue.Empty:
+
+        except queue.Empty:  # This won’t trigger with get(), but kept for safety
             time.sleep(0.1)
         except Exception as e:
-            logger.error(f"Playback error: {str(e)}")
+            logger.error(f"Playback error: {str(e)}", exc_info=True)  # Log full stack trace
             if 'wav_path' in locals() and os.path.exists(wav_path):
                 os.remove(wav_path)
             if not is_start_mode:
