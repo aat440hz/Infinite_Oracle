@@ -53,10 +53,23 @@ conversation_history = []
 class ConsoleRedirector:
     def __init__(self, text_widget):
         self.text_widget = text_widget
+        # Configure tags for colored text
+        self.text_widget.tag_configure("red", foreground="red")
+        self.text_widget.tag_configure("green", foreground="green")
 
     def write(self, message):
         self.text_widget.configure(state='normal')
-        self.text_widget.insert(tk.END, message)
+        if message.startswith("The Infinite Oracle speaks:"):
+            # Split the message into prefix and content
+            prefix = "The Infinite Oracle speaks: "
+            content = message[len(prefix):].strip()
+            # Insert prefix in red
+            self.text_widget.insert(tk.END, prefix, "red")
+            # Insert content in green
+            self.text_widget.insert(tk.END, content + "\n\n", "green")
+        else:
+            # Default to green for other messages
+            self.text_widget.insert(tk.END, message, "green")
         self.text_widget.see(tk.END)
         self.text_widget.configure(state='disabled')
         self.text_widget.update_idletasks()
@@ -228,28 +241,10 @@ def pitch_shift_with_librosa(audio_segment, semitones):
 
 def play_audio(audio_queue, stop_event, get_interval_func, get_variation_func, gui, duration_queue=None, is_start_mode=False):
     logger.debug("Using default audio backend (no FFmpeg specified)")
-    last_playback_end = time.time()  # Track when last playback ended
     while not stop_event.is_set():
         try:
-            if is_start_mode:
-                # Calculate the desired interval for Start Mode
-                current_time = time.time()
-                interval = max(0.1, get_interval_func() + random.uniform(-get_variation_func(), get_variation_func()))
-                time_since_last = current_time - last_playback_end
-                
-                # Wait if the interval hasn't elapsed since last playback
-                if time_since_last < interval:
-                    sleep_time = interval - time_since_last
-                    logger.debug(f"Waiting {sleep_time:.2f}s to enforce Speech Interval")
-                    time.sleep(sleep_time)
-
-            # Check queue without blocking
-            if audio_queue.empty():
-                time.sleep(0.1)  # Brief wait if queue is empty
-                continue
-
-            # Fetch and play audio
-            wisdom, wav_path, pitch = audio_queue.get_nowait()  # Non-blocking
+            logger.debug("Waiting for audio in playback thread")
+            wisdom, wav_path, pitch = audio_queue.get()
             logger.debug("Received audio: %s", wav_path)
             with playback_lock:
                 if not stop_event.is_set():
@@ -263,14 +258,14 @@ def play_audio(audio_queue, stop_event, get_interval_func, get_variation_func, g
                         octaves = pitch / 12.0
                         new_sample_rate = int(audio.frame_rate * (2.0 ** octaves))
                         audio = audio._spawn(audio.raw_data, overrides={"frame_rate": new_sample_rate})
-                        audio = audio.set_frame_rate(44100)
+                        audio = audio.set_frame_rate(44100)  # Use 44.1 kHz for better quality
 
                     reverb_value = gui.reverb_slider.get()
                     if reverb_value > 0:
                         audio = apply_reverb(audio, reverb_value)
 
                     audio = normalize(audio)
-                    gui.start_spinning(duration_seconds)
+                    gui.start_spinning(len(audio) / 1000.0)
                     play(audio)
                     gui.stop_spinning()
 
@@ -283,10 +278,21 @@ def play_audio(audio_queue, stop_event, get_interval_func, get_variation_func, g
                         audio.export(filepath, format="wav")
                         print(f"Recorded wisdom to: {filepath}")
 
-                    last_playback_end = time.time()  # Update after playback ends
-
             os.remove(wav_path)
             audio_queue.task_done()
+            interval = max(0.1, get_interval_func() + random.uniform(-get_variation_func(), get_variation_func())) if is_start_mode else 0
+            if not stop_event.is_set():
+                time.sleep(interval)
+        except queue.Empty:
+            time.sleep(0.1)
+        except Exception as e:
+            logger.error(f"Playback error: {str(e)}")
+            if 'wav_path' in locals() and os.path.exists(wav_path):
+                os.remove(wav_path)
+            if not is_start_mode:
+                gui.send_enabled = True
+                gui.start_lock = False
+                gui.after(0, gui.enable_send_and_start)
 
         except queue.Empty:
             time.sleep(0.1)  # Wait briefly if queue is empty
