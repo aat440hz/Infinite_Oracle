@@ -32,8 +32,8 @@ DEFAULT_LM_STUDIO_MODEL = "qwen2.5-1.5b-instruct"
 DEFAULT_TTS_URL = "http://localhost:5002/api/tts"
 DEFAULT_SPEAKER_ID = "p267"
 DEFAULT_WHISPER_SERVER_URL = "http://localhost:9000"
-DEFAULT_NUM_CTX = 100
 DEFAULT_FILTER = "*_#"
+DEFAULT_NUM_CTX = 100
 
 # Configuration file
 CONFIG_FILE = "oracle_config.json"
@@ -359,8 +359,8 @@ def load_config():
             "request_interval": 1.0,
             "timeout": 60,
             "retries": 0,
-            "num_ctx": DEFAULT_NUM_CTX,
-            "filter": DEFAULT_FILTER
+            "filter": DEFAULT_FILTER,
+            "num_ctx": DEFAULT_NUM_CTX
         },
         "LM Studio": {
             "server_type": "LM Studio",
@@ -376,8 +376,8 @@ def load_config():
             "request_interval": 1.0,
             "timeout": 60,
             "retries": 0,
-            "max_tokens": 100,
-            "filter": DEFAULT_FILTER
+            "filter": DEFAULT_FILTER,
+            "max_tokens": 100
         }
     }
     if os.path.exists(CONFIG_FILE):
@@ -392,26 +392,42 @@ def load_config():
 def save_config(gui):
     config = load_config()
     server_type = gui.server_type_var.get()
-    config[server_type] = {
-        "server_type": server_type,
-        "server_url": gui.server_url_var.get(),
-        "model": gui.model_var.get(),
-        "tts_url": gui.tts_url_var.get(),
-        "speaker_id": gui.speaker_id_var.get(),
-        "whisper_server": gui.whisper_server_var.get(),
-        "pitch": gui.pitch_slider.get(),
-        "reverb": gui.reverb_slider.get(),
-        "interval": float(gui.interval_entry.get()),
-        "variation": float(gui.variation_entry.get()),
-        "request_interval": float(gui.request_interval_entry.get()),
-        "timeout": gui.timeout_slider.get(),
-        "retries": gui.retries_slider.get(),
-        "filter": gui.filter_var.get()
-    }
     if server_type == "Ollama":
-        config[server_type]["num_ctx"] = int(gui.num_ctx_entry.get())
-    else:
-        config[server_type]["max_tokens"] = int(gui.max_tokens_entry.get())
+        config[server_type] = {
+            "server_type": server_type,
+            "server_url": gui.server_url_var.get(),
+            "model": gui.model_var.get(),
+            "tts_url": gui.tts_url_var.get(),
+            "speaker_id": gui.speaker_id_var.get(),
+            "whisper_server": gui.whisper_server_var.get(),
+            "pitch": gui.pitch_slider.get(),
+            "reverb": gui.reverb_slider.get(),
+            "interval": float(gui.interval_entry.get()),
+            "variation": float(gui.variation_entry.get()),
+            "request_interval": float(gui.request_interval_entry.get()),
+            "timeout": gui.timeout_slider.get(),
+            "retries": gui.retries_slider.get(),
+            "filter": gui.filter_var.get(),
+            "num_ctx": int(gui.num_ctx_entry.get())
+        }
+    else:  # LM Studio
+        config[server_type] = {
+            "server_type": server_type,
+            "server_url": gui.server_url_var.get(),
+            "model": gui.model_var.get(),
+            "tts_url": gui.tts_url_var.get(),
+            "speaker_id": gui.speaker_id_var.get(),
+            "whisper_server": gui.whisper_server_var.get(),
+            "pitch": gui.pitch_slider.get(),
+            "reverb": gui.reverb_slider.get(),
+            "interval": float(gui.interval_entry.get()),
+            "variation": float(gui.variation_entry.get()),
+            "request_interval": float(gui.request_interval_entry.get()),
+            "timeout": gui.timeout_slider.get(),
+            "retries": gui.retries_slider.get(),
+            "filter": gui.filter_var.get(),
+            "max_tokens": int(gui.max_tokens_entry.get())
+        }
     with open(CONFIG_FILE, 'w') as f:
         json.dump(config, f, indent=4)
 
