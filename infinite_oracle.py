@@ -744,7 +744,7 @@ class InfiniteOracleGUI(tk.Tk):
         console_frame.columnconfigure(0, weight=1)
         console_frame.rowconfigure(1, weight=1)
         tk.Label(console_frame, text="Console Output:", bg="#2b2b2b", fg="white").grid(row=0, column=0, sticky="w")
-        self.console_text = scrolledtext.ScrolledText(console_frame, height=30, width=80, state='disabled', bg="black", fg="green")
+        self.console_text = scrolledtext.ScrolledText(console_frame, height=30, width=120, state='disabled', bg="black", fg="green")
         self.console_text.grid(row=1, column=0, sticky="nsew")
 
     def start_tts_threads(self):
