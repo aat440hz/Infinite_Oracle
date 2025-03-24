@@ -22,6 +22,7 @@ import pyaudio
 import wave
 import librosa
 import numpy as np
+import re
 
 # Server defaults
 DEFAULT_OLLAMA_URL = "http://localhost:11434/api/chat"
@@ -31,7 +32,8 @@ DEFAULT_LM_STUDIO_MODEL = "qwen2.5-1.5b-instruct"
 DEFAULT_TTS_URL = "http://localhost:5002/api/tts"
 DEFAULT_SPEAKER_ID = "p267"
 DEFAULT_WHISPER_SERVER_URL = "http://localhost:9000"
-DEFAULT_NUM_CTX = 100  # Default context window size for Ollama
+DEFAULT_NUM_CTX = 100
+DEFAULT_FILTER = "*_#"
 
 # Configuration file
 CONFIG_FILE = "oracle_config.json"
@@ -53,22 +55,17 @@ conversation_history = []
 class ConsoleRedirector:
     def __init__(self, text_widget):
         self.text_widget = text_widget
-        # Configure tags for colored text
         self.text_widget.tag_configure("red", foreground="red")
         self.text_widget.tag_configure("green", foreground="green")
 
     def write(self, message):
         self.text_widget.configure(state='normal')
         if message.startswith("The Infinite Oracle speaks:"):
-            # Split the message into prefix and content
             prefix = "The Infinite Oracle speaks: "
             content = message[len(prefix):].strip()
-            # Insert prefix in red
             self.text_widget.insert(tk.END, prefix, "red")
-            # Insert content in green
             self.text_widget.insert(tk.END, content + "\n\n", "green")
         else:
-            # Default to green for other messages
             self.text_widget.insert(tk.END, message, "green")
         self.text_widget.see(tk.END)
         self.text_widget.configure(state='disabled')
@@ -110,6 +107,12 @@ def ping_server(server_url, server_type, model, timeout, retries):
     finally:
         session.close()
 
+def filter_text(text, filter_chars):
+    if not filter_chars:
+        return text
+    pattern = '[' + re.escape(filter_chars) + ']'
+    return re.sub(pattern, '', text)
+
 def generate_wisdom(gui, wisdom_queue, model, get_server_type_func, stop_event, get_request_interval_func, system_prompt):
     global conversation_history
     while not stop_event.is_set():
@@ -140,14 +143,15 @@ def generate_wisdom(gui, wisdom_queue, model, get_server_type_func, stop_event, 
                 else data.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
             )
             if wisdom and not stop_event.is_set():
+                filtered_wisdom = filter_text(wisdom, gui.filter_var.get())
                 with history_lock:
                     if gui.remember_var.get():
                         conversation_history.append({"role": "user", "content": system_prompt})
-                        conversation_history.append({"role": "assistant", "content": wisdom})
+                        conversation_history.append({"role": "assistant", "content": filtered_wisdom})
                         if len(conversation_history) > 100:
                             conversation_history = conversation_history[-100:]
-                logger.debug("Adding wisdom to queue: %s", wisdom)
-                wisdom_queue.put(wisdom)  # No print here
+                logger.debug("Adding filtered wisdom to queue: %s", filtered_wisdom)
+                wisdom_queue.put(filtered_wisdom)
         except requests.RequestException as e:
             logger.error(f"{server_type} connection failed: {str(e)}")
             print(f"{server_type} error: {str(e)}. Next attempt in {get_request_interval_func()}s...")
@@ -157,7 +161,6 @@ def generate_wisdom(gui, wisdom_queue, model, get_server_type_func, stop_event, 
         if not stop_event.is_set():
             time.sleep(get_request_interval_func())
 
-# [Text-to-speech and audio processing functions remain unchanged]
 def text_to_speech(wisdom_queue, audio_queue, get_speaker_id_func, pitch_func, stop_event, get_tts_url_func):
     while not stop_event.is_set():
         try:
@@ -210,11 +213,11 @@ def text_to_speech(wisdom_queue, audio_queue, get_speaker_id_func, pitch_func, s
             wisdom_queue.task_done()
 
 def apply_reverb(audio, reverb_value):
-    if reverb_value <= 0:  # Ensure no reverb when value is 0 or less
+    if reverb_value <= 0:
         return audio
     reverb_factor = reverb_value / 5.0
-    delay_ms = 30 + (reverb_factor * 20)  # Your updated value
-    gain_db = -25 + (reverb_factor * 10)  # Your updated value
+    delay_ms = 30 + (reverb_factor * 20)
+    gain_db = -25 + (reverb_factor * 10)
     echo = audio[:].fade_in(10).fade_out(50)
     echo = echo - abs(gain_db)
     silence = AudioSegment.silent(duration=int(delay_ms))
@@ -223,21 +226,20 @@ def apply_reverb(audio, reverb_value):
 def pitch_shift_with_librosa(audio_segment, semitones):
     samples = np.array(audio_segment.get_array_of_samples())
     sample_rate = audio_segment.frame_rate
-    # Force mono processing to avoid stereo artifacts
     if audio_segment.channels > 1:
         samples = np.mean(samples.reshape(-1, audio_segment.channels), axis=1)
     shifted_samples = librosa.effects.pitch_shift(
         samples.astype(float), 
         sr=sample_rate, 
         n_steps=semitones, 
-        bins_per_octave=12,  # Standard tuning
-        res_type='kaiser_fast'  # Faster, fewer artifacts
+        bins_per_octave=12,
+        res_type='kaiser_fast'
     )
     return AudioSegment(
         shifted_samples.astype(np.int16).tobytes(),
         frame_rate=sample_rate,
         sample_width=audio_segment.sample_width,
-        channels=1  # Ensure mono output
+        channels=1
     )
 
 def play_audio(audio_queue, stop_event, get_interval_func, get_variation_func, gui, duration_queue=None, is_start_mode=False):
@@ -255,7 +257,7 @@ def play_audio(audio_queue, stop_event, get_interval_func, get_variation_func, g
                     time.sleep(sleep_time)
 
             logger.debug("Waiting for audio in playback thread")
-            wisdom, wav_path, pitch = audio_queue.get()  # Blocking call
+            wisdom, wav_path, pitch = audio_queue.get()
             logger.debug("Received audio: %s", wav_path)
             
             with playback_lock:
@@ -278,7 +280,7 @@ def play_audio(audio_queue, stop_event, get_interval_func, get_variation_func, g
 
                     audio = normalize(audio)
                     logger.debug("Playing audio: %s", wav_path)
-                    print(f"The Infinite Oracle speaks: {wisdom}", end="\n\n")  # Print here
+                    print(f"The Infinite Oracle speaks: {wisdom}", end="\n\n")
                     gui.start_spinning(duration_seconds)
                     play(audio)
                     gui.stop_spinning()
@@ -357,7 +359,8 @@ def load_config():
             "request_interval": 1.0,
             "timeout": 60,
             "retries": 0,
-            "num_ctx": DEFAULT_NUM_CTX
+            "num_ctx": DEFAULT_NUM_CTX,
+            "filter": DEFAULT_FILTER
         },
         "LM Studio": {
             "server_type": "LM Studio",
@@ -373,7 +376,8 @@ def load_config():
             "request_interval": 1.0,
             "timeout": 60,
             "retries": 0,
-            "max_tokens": 100
+            "max_tokens": 100,
+            "filter": DEFAULT_FILTER
         }
     }
     if os.path.exists(CONFIG_FILE):
@@ -401,7 +405,8 @@ def save_config(gui):
         "variation": float(gui.variation_entry.get()),
         "request_interval": float(gui.request_interval_entry.get()),
         "timeout": gui.timeout_slider.get(),
-        "retries": gui.retries_slider.get()
+        "retries": gui.retries_slider.get(),
+        "filter": gui.filter_var.get()
     }
     if server_type == "Ollama":
         config[server_type]["num_ctx"] = int(gui.num_ctx_entry.get())
@@ -471,6 +476,23 @@ class InfiniteOracleGUI(tk.Tk):
         except Exception as e:
             logger.error(f"Icon load failed: {e}")
 
+        # Load images first since they’re needed by create_widgets
+        try:
+            if getattr(sys, 'frozen', False):
+                base_path = sys._MEIPASS
+            else:
+                base_path = os.path.dirname(os.path.abspath(__file__))
+            self.image_path = os.path.join(base_path, "oracle.png")
+            self.glow_path = os.path.join(base_path, "glow.gif")
+            
+            self.oracle_frames = self.load_pre_rotated_frames(self.image_path, 36)
+            self.glow_base_frames = self.load_gif_frames(self.glow_path)
+            self.glow_frames = [self.load_pre_rotated_frames_from_base(frame, 36) for frame in self.glow_base_frames]
+        except Exception as e:
+            logger.error(f"Pre-rendered frames load failed: {e}")
+            self.oracle_frames = [ImageTk.PhotoImage(Image.new("RGBA", (200, 200), (255, 255, 255, 0)))]
+            self.glow_frames = [[ImageTk.PhotoImage(Image.new("RGBA", (240, 240), (255, 255, 255, 0)))]]
+
         config = load_config()
         initial_server_type = "Ollama"
         self.initial_config = config.get(initial_server_type, {})
@@ -481,6 +503,7 @@ class InfiniteOracleGUI(tk.Tk):
         self.tts_url_var = tk.StringVar(value=self.initial_config.get("tts_url", DEFAULT_TTS_URL))
         self.speaker_id_var = tk.StringVar(value=self.initial_config.get("speaker_id", DEFAULT_SPEAKER_ID))
         self.whisper_server_var = tk.StringVar(value=self.initial_config.get("whisper_server", DEFAULT_WHISPER_SERVER_URL))
+        self.filter_var = tk.StringVar(value=self.initial_config.get("filter", DEFAULT_FILTER))
         self.session = None
         self.wisdom_queue = queue.Queue(maxsize=3)
         self.audio_queue = queue.Queue(maxsize=3)
@@ -507,28 +530,12 @@ class InfiniteOracleGUI(tk.Tk):
         self.animation_running = True
         self.animate_lock = threading.Lock()
 
-        try:
-            if getattr(sys, 'frozen', False):
-                base_path = sys._MEIPASS
-            else:
-                base_path = os.path.dirname(os.path.abspath(__file__))
-            self.image_path = os.path.join(base_path, "oracle.png")
-            self.glow_path = os.path.join(base_path, "glow.gif")
-            
-            self.oracle_frames = self.load_pre_rotated_frames(self.image_path, 36)
-            self.glow_base_frames = self.load_gif_frames(self.glow_path)
-            self.glow_frames = [self.load_pre_rotated_frames_from_base(frame, 36) for frame in self.glow_base_frames]
-        except Exception as e:
-            logger.error(f"Pre-rendered frames load failed: {e}")
-            self.oracle_frames = [ImageTk.PhotoImage(Image.new("RGBA", (200, 200), (255, 255, 255, 0)))]
-            self.glow_frames = [[ImageTk.PhotoImage(Image.new("RGBA", (240, 240), (255, 255, 255, 0)))]]
+        self.create_widgets()
+        sys.stdout = ConsoleRedirector(self.console_text)
+        self.server_type_var.trace("w", lambda *args: (self.stop_oracle(), self.update_from_config()))
 
         self.loading_screen.destroy()
         self.deiconify()
-
-        self.create_widgets()
-        sys.stdout = ConsoleRedirector(self.console_text)
-        self.server_type_var.trace("w", lambda *args: (self.stop_oracle(), self.update_from_config()))  # Updated line
 
         self.start_tts_threads()
         self.animation_thread = threading.Thread(target=self.run_animations, daemon=True)
@@ -610,14 +617,14 @@ class InfiniteOracleGUI(tk.Tk):
         right_frame = tk.Frame(self, bg="#2b2b2b")
         right_frame.grid(row=0, column=1, sticky="nsew", padx=10, pady=10)
         right_frame.columnconfigure(0, weight=1)
-        right_frame.rowconfigure(5, weight=1)  # Adjusted back since we're moving the context field
+        right_frame.rowconfigure(5, weight=1)
 
         slider_frame = tk.Frame(right_frame, bg="#2b2b2b")
         slider_frame.grid(row=0, column=0, sticky="ew")
         slider_frame.columnconfigure(0, weight=1)
         slider_frame.columnconfigure(1, weight=1)
         slider_frame.columnconfigure(2, weight=1)
-        slider_frame.columnconfigure(3, weight=1)  # Added extra column for num_ctx
+        slider_frame.columnconfigure(3, weight=1)
 
         tk.Label(slider_frame, text="Request Timeout (seconds):", bg="#2b2b2b", fg="white").grid(row=0, column=0, pady=2, sticky="w")
         self.timeout_slider = tk.Scale(slider_frame, from_=5, to=120, resolution=1, orient=tk.HORIZONTAL)
@@ -641,8 +648,16 @@ class InfiniteOracleGUI(tk.Tk):
         self.max_tokens_entry.grid(row=1, column=3, padx=10, pady=2, sticky="ew")
         self.max_tokens_entry.config(state=tk.DISABLED if self.server_type_var.get() == "Ollama" else tk.NORMAL)
 
+        response_frame = tk.LabelFrame(right_frame, text="Response Settings", bg="#2b2b2b", fg="white", padx=5, pady=5)
+        response_frame.grid(row=1, column=0, sticky="ew")
+        response_frame.columnconfigure(0, weight=1)
+
+        tk.Label(response_frame, text="Filter Characters:", bg="#2b2b2b", fg="white").grid(row=0, column=0, pady=2, sticky="w")
+        self.filter_entry = tk.Entry(response_frame, textvariable=self.filter_var)
+        self.filter_entry.grid(row=1, column=0, padx=10, pady=2, sticky="ew")
+
         start_mode_frame = tk.LabelFrame(right_frame, text="Start Mode Settings", bg="#2b2b2b", fg="white", padx=5, pady=5)
-        start_mode_frame.grid(row=1, column=0, sticky="ew")
+        start_mode_frame.grid(row=2, column=0, sticky="ew")
         start_mode_frame.columnconfigure(0, weight=1)
         start_mode_frame.columnconfigure(1, weight=1)
         start_mode_frame.columnconfigure(2, weight=1)
@@ -663,12 +678,13 @@ class InfiniteOracleGUI(tk.Tk):
         self.request_interval_entry.grid(row=1, column=2, padx=10, pady=2, sticky="ew")
 
         button_frame = tk.Frame(right_frame, bg="#2b2b2b")
-        button_frame.grid(row=2, column=0, sticky="ew")
+        button_frame.grid(row=3, column=0, sticky="ew")
         button_frame.columnconfigure(0, weight=1)
         button_frame.columnconfigure(1, weight=1)
         button_frame.columnconfigure(2, weight=1)
         button_frame.columnconfigure(3, weight=1)
         button_frame.columnconfigure(4, weight=1)
+        button_frame.columnconfigure(5, weight=1)
 
         self.start_button = tk.Button(button_frame, text="Start", command=self.start_oracle)
         self.start_button.grid(row=0, column=0, padx=5, pady=2, sticky="ew")
@@ -728,16 +744,15 @@ class InfiniteOracleGUI(tk.Tk):
     def reset_tts_threads(self):
         if self.send_tts_thread and self.send_tts_thread.is_alive():
             self.send_stop_event.set()
-            self.send_tts_thread.join(timeout=2)  # Increased timeout
+            self.send_tts_thread.join(timeout=2)
             if self.send_tts_thread.is_alive():
                 logger.warning("Send TTS thread did not stop cleanly")
         if self.send_playback_thread and self.send_playback_thread.is_alive():
-            self.send_stop_event.set()  # Ensure stop event is set
-            self.send_playback_thread.join(timeout=2)  # Increased timeout
+            self.send_stop_event.set()
+            self.send_playback_thread.join(timeout=2)
             if self.send_playback_thread.is_alive():
                 logger.warning("Send playback thread did not stop cleanly")
 
-        # Clear queues thoroughly
         while not self.send_wisdom_queue.empty():
             try:
                 self.send_wisdom_queue.get_nowait()
@@ -815,6 +830,7 @@ class InfiniteOracleGUI(tk.Tk):
         self.tts_url_var.set(server_config.get("tts_url", DEFAULT_TTS_URL))
         self.speaker_id_var.set(server_config.get("speaker_id", DEFAULT_SPEAKER_ID))
         self.whisper_server_var.set(server_config.get("whisper_server", DEFAULT_WHISPER_SERVER_URL))
+        self.filter_var.set(server_config.get("filter", DEFAULT_FILTER))
         self.pitch_slider.set(server_config.get("pitch", 0))
         self.reverb_slider.set(server_config.get("reverb", 0))
         self.interval_entry.delete(0, tk.END)
@@ -875,6 +891,7 @@ class InfiniteOracleGUI(tk.Tk):
         self.interval_entry.config(state=tk.DISABLED)
         self.variation_entry.config(state=tk.DISABLED)
         self.request_interval_entry.config(state=tk.DISABLED)
+        self.filter_entry.config(state=tk.DISABLED)
         self.timeout_slider.config(state=tk.DISABLED)
         self.retries_slider.config(state=tk.DISABLED)
         self.max_tokens_entry.config(state=tk.DISABLED, bg="grey")
@@ -891,7 +908,7 @@ class InfiniteOracleGUI(tk.Tk):
             self.save_button.config(state=tk.NORMAL)
             self.clear_button.config(state=tk.NORMAL if self.remember_var.get() else tk.DISABLED)
             self.remember_check.config(state=tk.NORMAL)
-            self.record_button.config(state=tk.NORMAL)  # Fixed syntax error
+            self.record_button.config(state=tk.NORMAL)
             self.server_type_menu.config(state=tk.NORMAL)
             self.server_url_entry.config(state=tk.NORMAL)
             self.model_entry.config(state=tk.NORMAL)
@@ -904,13 +921,14 @@ class InfiniteOracleGUI(tk.Tk):
             self.interval_entry.config(state=tk.NORMAL)
             self.variation_entry.config(state=tk.NORMAL)
             self.request_interval_entry.config(state=tk.NORMAL)
+            self.filter_entry.config(state=tk.NORMAL)
             self.timeout_slider.config(state=tk.NORMAL)
             self.retries_slider.config(state=tk.NORMAL)
             server_type = self.server_type_var.get()
             self.max_tokens_entry.config(state=tk.NORMAL if server_type != "Ollama" else tk.DISABLED, 
-                                      bg="white" if server_type != "Ollama" else "grey")
+                                         bg="white" if server_type != "Ollama" else "grey")
             self.num_ctx_entry.config(state=tk.NORMAL if server_type == "Ollama" else tk.DISABLED,
-                                    bg="white" if server_type == "Ollama" else "grey")
+                                      bg="white" if server_type == "Ollama" else "grey")
             self.send_enabled = True
 
     def save_config_action(self):
@@ -957,10 +975,9 @@ class InfiniteOracleGUI(tk.Tk):
                 self.after(0, self.enable_send_and_start)
                 return
 
-            # Full stop and reset
             self.stop_oracle()
-            time.sleep(0.5)  # Brief pause to ensure threads terminate
-            self.stop_event = threading.Event()  # Fresh stop event
+            time.sleep(0.5)
+            self.stop_event = threading.Event()
             self.reset_tts_threads()
 
             success, error_msg = ping_server(server_url, server_type, model, self.timeout_slider.get(), self.retries_slider.get())
@@ -995,7 +1012,7 @@ class InfiniteOracleGUI(tk.Tk):
             self.tts_thread.start()
             self.playback_thread.start()
             logger.debug("Threads started: generator=%s, tts=%s, playback=%s", 
-                        self.generator_thread.is_alive(), self.tts_thread.is_alive(), self.playback_thread.is_alive())
+                         self.generator_thread.is_alive(), self.tts_thread.is_alive(), self.playback_thread.is_alive())
 
         threading.Thread(target=start_thread, daemon=True).start()
 
@@ -1006,7 +1023,6 @@ class InfiniteOracleGUI(tk.Tk):
                 self.is_running = False
                 self.stop_event.set()
                 
-                # Increase join timeouts and log if threads persist
                 if self.generator_thread and self.generator_thread.is_alive():
                     self.generator_thread.join(timeout=2)
                     if self.generator_thread.is_alive():
@@ -1019,12 +1035,11 @@ class InfiniteOracleGUI(tk.Tk):
                     self.tts_thread = None
                 
                 if self.playback_thread and self.playback_thread.is_alive():
-                    self.playback_thread.join(timeout=15)  # Longer timeout for playback
+                    self.playback_thread.join(timeout=15)
                     if self.playback_thread.is_alive():
                         logger.warning("Playback thread did not stop cleanly")
                     self.playback_thread = None
                 
-                # Clear queues with a timeout
                 logger.debug("Clearing queues: wisdom=%d, audio=%d", self.wisdom_queue.qsize(), self.audio_queue.qsize())
                 while not self.wisdom_queue.empty():
                     try:
@@ -1048,7 +1063,6 @@ class InfiniteOracleGUI(tk.Tk):
                 with history_lock:
                     conversation_history = []
 
-                # Reset GUI state
                 self.start_button.config(state=tk.NORMAL)
                 self.send_button.config(state=tk.NORMAL)
                 self.save_button.config(state=tk.NORMAL)
@@ -1068,13 +1082,14 @@ class InfiniteOracleGUI(tk.Tk):
                 self.interval_entry.config(state=tk.NORMAL)
                 self.variation_entry.config(state=tk.NORMAL)
                 self.request_interval_entry.config(state=tk.NORMAL)
+                self.filter_entry.config(state=tk.NORMAL)
                 self.timeout_slider.config(state=tk.NORMAL)
                 self.retries_slider.config(state=tk.NORMAL)
                 server_type = self.server_type_var.get()
                 self.max_tokens_entry.config(state=tk.NORMAL if server_type != "Ollama" else tk.DISABLED, 
-                                           bg="white" if server_type != "Ollama" else "grey")
+                                             bg="white" if server_type != "Ollama" else "grey")
                 self.num_ctx_entry.config(state=tk.NORMAL if server_type == "Ollama" else tk.DISABLED,
-                                        bg="white" if server_type == "Ollama" else "grey")
+                                          bg="white" if server_type == "Ollama" else "grey")
                 self.start_lock = False
                 self.send_enabled = True
                 self.after(100, self.enable_send_and_start)
@@ -1160,14 +1175,15 @@ class InfiniteOracleGUI(tk.Tk):
             logger.debug("Received response: %s", wisdom)
 
             if wisdom:
+                filtered_wisdom = filter_text(wisdom, self.filter_var.get())
                 with history_lock:
                     if self.remember_var.get():
                         conversation_history.append({"role": "user", "content": prompt})
-                        conversation_history.append({"role": "assistant", "content": wisdom})
+                        conversation_history.append({"role": "assistant", "content": filtered_wisdom})
                         if len(conversation_history) > 100:
                             conversation_history = conversation_history[-100:]
-                logger.debug("Queueing wisdom: %s", wisdom)
-                wisdom_queue.put(wisdom)  # Print moved to play_audio
+                logger.debug("Queueing filtered wisdom: %s", filtered_wisdom)
+                wisdom_queue.put(filtered_wisdom)
 
                 try:
                     logger.debug("Waiting for TTS audio")
@@ -1237,11 +1253,12 @@ class InfiniteOracleGUI(tk.Tk):
                     logger.debug("Transcription from server: %s", text)
                     print(f"Transcribed: {text}")
                     
+                    filtered_text = filter_text(text, self.filter_var.get())
                     with history_lock:
                         if self.remember_var.get():
-                            conversation_history.append({"role": "user", "content": text})
+                            conversation_history.append({"role": "user", "content": filtered_text})
                     self.system_prompt_entry.delete("1.0", tk.END)
-                    self.system_prompt_entry.insert(tk.END, text)
+                    self.system_prompt_entry.insert(tk.END, filtered_text)
             
             except requests.RequestException as e:
                 logger.error(f"Whisper server error: {str(e)}")
@@ -1259,7 +1276,7 @@ class InfiniteOracleGUI(tk.Tk):
             self.after(0, self.enable_send_and_start)
             
             if text:
-                logger.debug("Triggering send_prompt_action with: %s", text)
+                logger.debug("Triggering send_prompt_action with filtered text: %s", filtered_text)
                 self.send_prompt_action()
             else:
                 logger.debug("No transcription available, skipping send_prompt_action")
