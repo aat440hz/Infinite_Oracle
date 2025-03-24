@@ -108,8 +108,9 @@ def ping_server(server_url, server_type, model, timeout, retries):
         session.close()
 
 def filter_text(text, filter_chars):
-    if not filter_chars:
+    if not filter_chars or not text:
         return text
+    # Replace specified characters with an empty string
     pattern = '[' + re.escape(filter_chars) + ']'
     return re.sub(pattern, '', text)
 
@@ -143,6 +144,7 @@ def generate_wisdom(gui, wisdom_queue, model, get_server_type_func, stop_event, 
                 else data.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
             )
             if wisdom and not stop_event.is_set():
+                # Filter replaces characters instead of skipping message
                 filtered_wisdom = filter_text(wisdom, gui.filter_var.get())
                 with history_lock:
                     if gui.remember_var.get():
@@ -1191,6 +1193,7 @@ class InfiniteOracleGUI(tk.Tk):
             logger.debug("Received response: %s", wisdom)
 
             if wisdom:
+                # Filter replaces characters instead of skipping message
                 filtered_wisdom = filter_text(wisdom, self.filter_var.get())
                 with history_lock:
                     if self.remember_var.get():
