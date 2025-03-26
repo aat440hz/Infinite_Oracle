@@ -511,9 +511,12 @@ class InfiniteOracleGUI(tk.Tk):
             self.oracle_frames = [ImageTk.PhotoImage(Image.new("RGBA", (200, 200), (255, 255, 255, 0)))]
             self.glow_frames = [[ImageTk.PhotoImage(Image.new("RGBA", (240, 240), (255, 255, 255, 0)))]]
 
+        # Load config and store it fully
         config = load_config()
         initial_server_type = "Ollama"
+        self.config = config  # Store full config for use in create_widgets
         self.initial_config = config.get(initial_server_type, {})
+        logger.debug(f"Loaded config at startup: Ollama num_ctx={self.config['Ollama'].get('num_ctx')}, LM Studio max_tokens={self.config['LM Studio'].get('max_tokens')}")
 
         self.server_type_var = tk.StringVar(value=initial_server_type)
         self.server_url_var = tk.StringVar(value=self.initial_config.get("server_url", DEFAULT_OLLAMA_URL))
@@ -620,12 +623,12 @@ class InfiniteOracleGUI(tk.Tk):
 
         tk.Label(effects_frame, text="Pitch Shift (semitones):", bg="#2b2b2b", fg="white").grid(row=0, column=0, pady=2, sticky="w")
         self.pitch_slider = tk.Scale(effects_frame, from_=-12, to=12, orient=tk.HORIZONTAL, length=150)
-        self.pitch_slider.set(self.initial_config.get("pitch", 0))  # Use initial_config
+        self.pitch_slider.set(self.initial_config.get("pitch", 0))
         self.pitch_slider.grid(row=1, column=0, pady=2, sticky="ew")
 
         tk.Label(effects_frame, text="Reverb (0-5):", bg="#2b2b2b", fg="white").grid(row=2, column=0, pady=2, sticky="w")
         self.reverb_slider = tk.Scale(effects_frame, from_=0, to=5, resolution=0.1, orient=tk.HORIZONTAL, length=150)
-        self.reverb_slider.set(self.initial_config.get("reverb", 0))  # Use initial_config
+        self.reverb_slider.set(self.initial_config.get("reverb", 0))
         self.reverb_slider.grid(row=3, column=0, pady=2, sticky="ew")
 
         # Request Settings
@@ -636,15 +639,15 @@ class InfiniteOracleGUI(tk.Tk):
 
         tk.Label(sliders_frame, text="Request Timeout (seconds):", bg="#2b2b2b", fg="white").grid(row=0, column=0, pady=2, sticky="w")
         self.timeout_slider = tk.Scale(sliders_frame, from_=5, to=120, resolution=1, orient=tk.HORIZONTAL, length=150)
-        self.timeout_slider.set(self.initial_config.get("timeout", 60))  # Use initial_config
+        self.timeout_slider.set(self.initial_config.get("timeout", 60))
         self.timeout_slider.grid(row=1, column=0, pady=2, sticky="ew")
 
         tk.Label(sliders_frame, text="Request Retries:", bg="#2b2b2b", fg="white").grid(row=2, column=0, pady=2, sticky="w")
         self.retries_slider = tk.Scale(sliders_frame, from_=0, to=5, resolution=1, orient=tk.HORIZONTAL, length=150)
-        self.retries_slider.set(self.initial_config.get("retries", 0))  # Use initial_config
+        self.retries_slider.set(self.initial_config.get("retries", 0))
         self.retries_slider.grid(row=3, column=0, pady=2, sticky="ew")
 
-        # Response Settings (with Max Tokens added back)
+        # Response Settings (with Max Tokens and Context Size)
         response_frame = tk.LabelFrame(self.left_frame, text="Response Settings", bg="#2b2b2b", fg="white", padx=5, pady=5, borderwidth=2, relief="solid", width=group_width)
         response_frame.grid(row=0, column=3, rowspan=6, pady=2, padx=5, sticky="ns")
         response_frame.columnconfigure(0, weight=1)
@@ -656,15 +659,20 @@ class InfiniteOracleGUI(tk.Tk):
 
         tk.Label(response_frame, text="Context Size (Ollama):", bg="#2b2b2b", fg="white").grid(row=2, column=0, pady=2, sticky="w")
         self.num_ctx_entry = tk.Entry(response_frame, width=10)
-        self.num_ctx_entry.insert(0, str(self.initial_config.get("num_ctx", DEFAULT_NUM_CTX)))  # Use initial_config
+        num_ctx_value = self.config["Ollama"].get("num_ctx", DEFAULT_NUM_CTX)  # Always use Ollama's config
+        self.num_ctx_entry.insert(0, str(num_ctx_value))
+        logger.debug(f"Setting num_ctx_entry to {num_ctx_value} from Ollama config")
         self.num_ctx_entry.grid(row=3, column=0, padx=5, pady=2, sticky="w")
-        self.num_ctx_entry.config(state=tk.NORMAL if self.server_type_var.get() == "Ollama" else tk.DISABLED)
+        server_type = self.server_type_var.get()
+        self.num_ctx_entry.config(state=tk.NORMAL if server_type == "Ollama" else tk.DISABLED)
 
         tk.Label(response_frame, text="Max Tokens (LM Studio):", bg="#2b2b2b", fg="white").grid(row=4, column=0, pady=2, sticky="w")
         self.max_tokens_entry = tk.Entry(response_frame, width=10)
-        self.max_tokens_entry.insert(0, str(self.initial_config.get("max_tokens", 100)))  # Use initial_config with default 100
+        max_tokens_value = self.config["LM Studio"].get("max_tokens", 100)  # Always use LM Studio's config
+        self.max_tokens_entry.insert(0, str(max_tokens_value))
+        logger.debug(f"Setting max_tokens_entry to {max_tokens_value} from LM Studio config")
         self.max_tokens_entry.grid(row=5, column=0, padx=5, pady=2, sticky="w")
-        self.max_tokens_entry.config(state=tk.DISABLED if self.server_type_var.get() == "Ollama" else tk.NORMAL)
+        self.max_tokens_entry.config(state=tk.DISABLED if server_type == "Ollama" else tk.NORMAL)
 
         # Start Mode Settings
         start_mode_frame = tk.LabelFrame(self.left_frame, text="Start Mode Settings", bg="#2b2b2b", fg="white", padx=5, pady=5, borderwidth=2, relief="solid", width=group_width)
@@ -674,23 +682,22 @@ class InfiniteOracleGUI(tk.Tk):
 
         tk.Label(start_mode_frame, text="Speech Interval:", bg="#2b2b2b", fg="white").grid(row=0, column=0, pady=2, sticky="w")
         self.interval_entry = tk.Entry(start_mode_frame, width=10)
-        self.interval_entry.insert(0, str(self.initial_config.get("interval", 2.0)))  # Use initial_config
+        self.interval_entry.insert(0, str(self.initial_config.get("interval", 2.0)))
         self.interval_entry.grid(row=1, column=0, padx=5, pady=2, sticky="w")
 
         tk.Label(start_mode_frame, text="Speech Interval Variation:", bg="#2b2b2b", fg="white").grid(row=2, column=0, pady=2, sticky="w")
         self.variation_entry = tk.Entry(start_mode_frame, width=10)
-        self.variation_entry.insert(0, str(self.initial_config.get("variation", 0)))  # Use initial_config
+        self.variation_entry.insert(0, str(self.initial_config.get("variation", 0)))
         self.variation_entry.grid(row=3, column=0, padx=5, pady=2, sticky="w")
 
         tk.Label(start_mode_frame, text="Request Interval:", bg="#2b2b2b", fg="white").grid(row=4, column=0, pady=2, sticky="w")
         self.request_interval_entry = tk.Entry(start_mode_frame, width=10)
-        self.request_interval_entry.insert(0, str(self.initial_config.get("request_interval", 1.0)))  # Use initial_config
+        self.request_interval_entry.insert(0, str(self.initial_config.get("request_interval", 1.0)))
         self.request_interval_entry.grid(row=5, column=0, padx=5, pady=2, sticky="w")
 
         tk.Label(self.left_frame, text="System Prompt:", bg="#2b2b2b", fg="white").grid(row=6, column=0, pady=2, sticky="w")
-        self.system_prompt_entry = tk.Text(self.left_frame, height=10, width=80)  # Wider and taller
+        self.system_prompt_entry = tk.Text(self.left_frame, height=10, width=80)
         self.system_prompt_entry.insert(tk.END, SYSTEM_PROMPT)
-        self.system_prompt_entry.grid(row=7, column=0, columnspan=5, pady=2, sticky="nsew")
         self.left_frame.rowconfigure(7, weight=1)
 
         self.send_button = tk.Button(self.left_frame, text="Send", command=self.send_prompt_action)
@@ -713,7 +720,7 @@ class InfiniteOracleGUI(tk.Tk):
         right_frame = tk.Frame(self, bg="#2b2b2b")
         right_frame.grid(row=0, column=1, rowspan=2, sticky="nsew", padx=10, pady=10)
         right_frame.columnconfigure(0, weight=1)
-        right_frame.rowconfigure(1, weight=1)  # Console stretches
+        right_frame.rowconfigure(1, weight=1)
 
         # Buttons
         button_frame = tk.Frame(right_frame, bg="#2b2b2b")
@@ -881,16 +888,20 @@ class InfiniteOracleGUI(tk.Tk):
         self.request_interval_entry.insert(0, str(server_config.get("request_interval", 1.0)))
         self.timeout_slider.set(server_config.get("timeout", 60))
         self.retries_slider.set(server_config.get("retries", 0))
-        if server_type == "Ollama":
-            self.num_ctx_entry.delete(0, tk.END)
-            self.num_ctx_entry.insert(0, str(server_config.get("num_ctx", DEFAULT_NUM_CTX)))
-            self.num_ctx_entry.config(state=tk.NORMAL, bg="white")
-            self.max_tokens_entry.config(state=tk.DISABLED, bg="grey")
-        else:
-            self.max_tokens_entry.delete(0, tk.END)
-            self.max_tokens_entry.insert(0, str(server_config.get("max_tokens", 300)))
-            self.max_tokens_entry.config(state=tk.NORMAL, bg="white")
-            self.num_ctx_entry.config(state=tk.DISABLED, bg="grey")
+
+        # Update num_ctx and max_tokens from their respective configs
+        num_ctx_value = config["Ollama"].get("num_ctx", DEFAULT_NUM_CTX)  # Always use Ollama's config
+        self.num_ctx_entry.delete(0, tk.END)
+        self.num_ctx_entry.insert(0, str(num_ctx_value))
+        self.num_ctx_entry.config(state=tk.NORMAL if server_type == "Ollama" else tk.DISABLED, bg="white" if server_type == "Ollama" else "grey")
+        logger.debug(f"Updated num_ctx_entry to {num_ctx_value} from Ollama config for {server_type}")
+
+        max_tokens_value = config["LM Studio"].get("max_tokens", 100)  # Always use LM Studio's config
+        self.max_tokens_entry.delete(0, tk.END)
+        self.max_tokens_entry.insert(0, str(max_tokens_value))
+        self.max_tokens_entry.config(state=tk.NORMAL if server_type != "Ollama" else tk.DISABLED, bg="white" if server_type != "Ollama" else "grey")
+        logger.debug(f"Updated max_tokens_entry to {max_tokens_value} from LM Studio config for {server_type}")
+
         self.url_modified = False
         logger.debug(f"Loaded config from file for {server_type}: {server_config}")
 
