@@ -695,9 +695,11 @@ class InfiniteOracleGUI(tk.Tk):
         self.request_interval_entry.insert(0, str(self.initial_config.get("request_interval", 1.0)))
         self.request_interval_entry.grid(row=5, column=0, padx=5, pady=2, sticky="w")
 
+        # System Prompt (Restored)
         tk.Label(self.left_frame, text="System Prompt:", bg="#2b2b2b", fg="white").grid(row=6, column=0, pady=2, sticky="w")
-        self.system_prompt_entry = tk.Text(self.left_frame, height=10, width=80)
+        self.system_prompt_entry = tk.Text(self.left_frame, height=10, width=80)  # Wider and taller
         self.system_prompt_entry.insert(tk.END, SYSTEM_PROMPT)
+        self.system_prompt_entry.grid(row=7, column=0, columnspan=5, pady=2, sticky="nsew")
         self.left_frame.rowconfigure(7, weight=1)
 
         self.send_button = tk.Button(self.left_frame, text="Send", command=self.send_prompt_action)
