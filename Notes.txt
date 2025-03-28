@@ -1,0 +1,10 @@
+pip install requests
+pip install soundfile
+pip install pydub
+pip install pyaudio
+
+*Python 3.12*
+pyinstaller --onefile --noconsole --add-data "oracle.png;." --add-data "glow.gif;." --add-data "ffmpeg/ffmpeg.exe;ffmpeg" --icon=oracle.png infinite_oracle.py
+pyinstaller --onefile --noconsole --add-data "oracle.png;." --add-data "glow.gif;." --add-data "ffmpeg/ffmpeg.exe;ffmpeg" --add-data "tbb12.dll;." --icon=oracle.png infinite_oracle.py
+*Python 3.11/3.13*
+python -m PyInstaller --noconsole --add-data "oracle.png;." --add-data "glow.gif;." --add-data "tbb12.dll;." --icon=oracle.png --hidden-import pydub --hidden-import pydub.effects --hidden-import pyaudio infinite_oracle.py
