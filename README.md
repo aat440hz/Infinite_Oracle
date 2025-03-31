@@ -20,8 +20,6 @@ Below are step-by-step instructions for setting up each component.
    - **[Download Infinite Oracle](https://drive.google.com/file/d/1Tf_A8J9BmAkf8wgbs-AGSDqc4uMeAKLr/view?usp=sharing)**
 2. Once downloaded, extract the ZIP file to a folder on your computer.
 
-**Note**: For files this large, Google Drive may require a confirmation step. If prompted, click "Download Anyway". Alternatively, see the troubleshooting section for a command-line download method using `gdown`.
-
 ---
 
 ## Step 2: Install and Configure the AI Backend
@@ -199,17 +197,6 @@ The Whisper ASR Webservice enables voice input by transcribing spoken audio usin
   - Restart Docker Desktop and rerun the `docker run` commands.
 - **CUDA Errors**:
   - Ensure NVIDIA drivers and CUDA toolkit are installed if using GPU versions. Otherwise, use CPU-only commands.
-- **Download Issues**:
-  - If the Google Drive link prompts a confirmation, install Python and `gdown`:
-    ```
-    pip install gdown
-    ```
-  - Then run:
-    ```
-    gdown https://drive.google.com/uc?id=YOUR_FILE_ID
-    ```
-  - Replace `YOUR_FILE_ID` with the ID from your link.
-
 ---
 
 ## Features
