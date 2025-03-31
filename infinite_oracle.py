@@ -312,11 +312,11 @@ def play_audio(audio_queue, stop_event, get_interval_func, get_variation_func, g
                 gui.start_lock = False
                 gui.after(0, gui.enable_send_and_start)
 
-def capture_audio(duration=5, filename=None):
-    CHUNK = 1024
+def capture_audio(filename=None, silence_threshold=500, silence_duration=3, chunk_size=1024, rate=16000):
     FORMAT = pyaudio.paInt16
     CHANNELS = 1
-    RATE = 16000
+    CHUNK = chunk_size
+    RATE = rate
 
     if filename is None:
         script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -325,13 +325,28 @@ def capture_audio(duration=5, filename=None):
     p = pyaudio.PyAudio()
     stream = p.open(format=FORMAT, channels=CHANNELS, rate=RATE, input=True, frames_per_buffer=CHUNK)
     
-    print("Listening...")
+    print("Listening... Speak your wisdom.")
     frames = []
-    for _ in range(0, int(RATE / CHUNK * duration)):
-        data = stream.read(CHUNK)
+    silence_start = None
+    listening = True
+
+    while listening:
+        data = stream.read(CHUNK, exception_on_overflow=False)
         frames.append(data)
-    
-    print("Done listening.")
+        
+        # Calculate RMS (root mean square) amplitude for noise detection
+        audio_data = np.frombuffer(data, dtype=np.int16)
+        rms = np.sqrt(np.mean(audio_data**2))
+        
+        if rms < silence_threshold:
+            if silence_start is None:
+                silence_start = time.time()
+            elif time.time() - silence_start >= silence_duration:
+                listening = False  # 3 seconds of silence detected
+        else:
+            silence_start = None  # Reset silence timer if sound is detected
+
+    print("Silence detected. Transcribing your message...")
     stream.stop_stream()
     stream.close()
     p.terminate()
@@ -1279,7 +1294,8 @@ class InfiniteOracleGUI(tk.Tk):
             self.disable_controls()
             logger.debug("Starting listen_thread")
             
-            audio_file = capture_audio(duration=5)
+            # Capture audio with noise gate (3-second silence delay)
+            audio_file = capture_audio(silence_threshold=500, silence_duration=3)
             
             whisper_server_url = self.whisper_server_var.get()
             if not whisper_server_url.endswith("/asr"):
