@@ -1,0 +1,40 @@
+# Notes for Setting Up and Building infinite_oracle.py with PyInstaller
+
+# Step 1: Create the Virtual Environment
+# This creates a clean, isolated environment for infinite_oracle.py
+python -m venv infinite_oracle_env
+
+# Step 2: Activate the Virtual Environment
+# Windows:
+infinite_oracle_env\Scripts\activate
+# macOS/Linux:
+source infinite_oracle_env/bin/activate
+# After activation, your terminal prompt will show (infinite_oracle_env)
+
+# Step 3: Install Required Dependencies
+# These are the libraries infinite_oracle.py needs (no PyTorch required)
+pip install requests tkinter pydub librosa pyaudio pillow numpy pyinstaller
+
+# Step 4: Run PyInstaller to Build the Executable
+# Ensure oracle.png, glow.gif, and tbb12.dll are in the same directory as infinite_oracle.py
+python -m PyInstaller --noconsole --add-data "oracle.png;." --add-data "glow.gif;." --add-data "tbb12.dll;." --icon=oracle.png --hidden-import pydub --hidden-import pydub.effects --hidden-import pyaudio --onedir infinite_oracle.py
+# Output: dist/infinite_oracle.exe (size ~50-100 MB)
+
+# Step 5: Deactivate the Virtual Environment
+# This returns you to your global environment
+deactivate
+
+# Step 6: Re-Enter the Virtual Environment (For Future Builds)
+# If you need to rebuild later, reactivate with:
+# Windows:
+infinite_oracle_env\Scripts\activate
+# macOS/Linux:
+source infinite_oracle_env/bin/activate
+# Then repeat Step 4 to rebuild
+
+# Additional Notes:
+# - Use your global environment for testing (python infinite_oracle.py)
+# - The virtual environment persists in the infinite_oracle_env folder
+# - If the build fails due to missing files, ensure oracle.png, glow.gif, and tbb12.dll are present
+# - Expected executable size: ~50-100 MB (no PyTorch bloat)
+# - Run dist/infinite_oracle.exe to test the build
