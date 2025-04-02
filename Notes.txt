@@ -1,6 +1,0 @@
-pip install requests
-pip install soundfile
-pip install pydub
-pip install pyaudio
-
-python -m PyInstaller --noconsole --add-data "oracle.png;." --add-data "glow.gif;." --add-data "tbb12.dll;." --icon=oracle.png --hidden-import pydub --hidden-import pydub.effects --hidden-import pyaudio infinite_oracle.py
