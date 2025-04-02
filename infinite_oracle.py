@@ -144,7 +144,6 @@ def generate_wisdom(gui, wisdom_queue, model, get_server_type_func, stop_event, 
                 else data.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
             )
             if wisdom and not stop_event.is_set():
-                # Filter replaces characters instead of skipping message
                 filtered_wisdom = filter_text(wisdom, gui.filter_var.get())
                 with history_lock:
                     if gui.remember_var.get():
@@ -152,8 +151,11 @@ def generate_wisdom(gui, wisdom_queue, model, get_server_type_func, stop_event, 
                         conversation_history.append({"role": "assistant", "content": filtered_wisdom})
                         if len(conversation_history) > 100:
                             conversation_history = conversation_history[-100:]
-                logger.debug("Adding filtered wisdom to queue: %s", filtered_wisdom)
-                wisdom_queue.put(filtered_wisdom)
+                try:
+                    wisdom_queue.put_nowait(filtered_wisdom)  # Non-blocking
+                    logger.debug("Added filtered wisdom to queue: %s", filtered_wisdom)
+                except queue.Full:
+                    logger.warning("Wisdom queue full, skipping: %s", filtered_wisdom)
         except requests.RequestException as e:
             logger.error(f"{server_type} connection failed: {str(e)}")
             print(f"{server_type} error: {str(e)}. Next attempt in {get_request_interval_func()}s...")
@@ -258,7 +260,7 @@ def play_audio(audio_queue, stop_event, get_interval_func, get_variation_func, g
                     logger.debug(f"Waiting {sleep_time:.2f}s to enforce Speech Interval")
                     time.sleep(sleep_time)
 
-            logger.debug("Waiting for audio in playback thread")
+            logger.debug("Audio queue size: %d", audio_queue.qsize())
             wisdom, wav_path, pitch = audio_queue.get()
             logger.debug("Received audio: %s", wav_path)
             
@@ -373,7 +375,6 @@ def load_config():
             "reverb": 0,
             "interval": 2.0,
             "variation": 0.0,
-            "request_interval": 1.0,
             "timeout": 60,
             "retries": 0,
             "filter": DEFAULT_FILTER,
@@ -390,7 +391,6 @@ def load_config():
             "reverb": 0,
             "interval": 2.0,
             "variation": 0.0,
-            "request_interval": 1.0,
             "timeout": 60,
             "retries": 0,
             "filter": DEFAULT_FILTER,
@@ -421,7 +421,6 @@ def save_config(gui):
             "reverb": gui.reverb_slider.get(),
             "interval": float(gui.interval_entry.get()),
             "variation": float(gui.variation_entry.get()),
-            "request_interval": float(gui.request_interval_entry.get()),
             "timeout": gui.timeout_slider.get(),
             "retries": gui.retries_slider.get(),
             "filter": gui.filter_var.get(),
@@ -439,7 +438,6 @@ def save_config(gui):
             "reverb": gui.reverb_slider.get(),
             "interval": float(gui.interval_entry.get()),
             "variation": float(gui.variation_entry.get()),
-            "request_interval": float(gui.request_interval_entry.get()),
             "timeout": gui.timeout_slider.get(),
             "retries": gui.retries_slider.get(),
             "filter": gui.filter_var.get(),
@@ -541,8 +539,8 @@ class InfiniteOracleGUI(tk.Tk):
         self.whisper_server_var = tk.StringVar(value=self.initial_config.get("whisper_server", DEFAULT_WHISPER_SERVER_URL))
         self.filter_var = tk.StringVar(value=self.initial_config.get("filter", DEFAULT_FILTER))
         self.session = None
-        self.wisdom_queue = queue.Queue(maxsize=3)
-        self.audio_queue = queue.Queue(maxsize=3)
+        self.wisdom_queue = queue.Queue(maxsize=10)  # Increased from 3
+        self.audio_queue = queue.Queue(maxsize=10)   # Increased from 3
         self.duration_queue = queue.Queue(maxsize=1)
         self.is_running = False
         self.start_lock = False
@@ -704,11 +702,6 @@ class InfiniteOracleGUI(tk.Tk):
         self.variation_entry = tk.Entry(start_mode_frame, width=10)
         self.variation_entry.insert(0, str(self.initial_config.get("variation", 0)))
         self.variation_entry.grid(row=3, column=0, padx=5, pady=2, sticky="w")
-
-        tk.Label(start_mode_frame, text="Request Interval:", bg="#2b2b2b", fg="white").grid(row=4, column=0, pady=2, sticky="w")
-        self.request_interval_entry = tk.Entry(start_mode_frame, width=10)
-        self.request_interval_entry.insert(0, str(self.initial_config.get("request_interval", 1.0)))
-        self.request_interval_entry.grid(row=5, column=0, padx=5, pady=2, sticky="w")
 
         # System Prompt (Restored)
         tk.Label(self.left_frame, text="System Prompt:", bg="#2b2b2b", fg="white").grid(row=6, column=0, pady=2, sticky="w")
@@ -901,8 +894,6 @@ class InfiniteOracleGUI(tk.Tk):
         self.interval_entry.insert(0, str(server_config.get("interval", 2.0)))
         self.variation_entry.delete(0, tk.END)
         self.variation_entry.insert(0, str(server_config.get("variation", 0)))
-        self.request_interval_entry.delete(0, tk.END)
-        self.request_interval_entry.insert(0, str(server_config.get("request_interval", 1.0)))
         self.timeout_slider.set(server_config.get("timeout", 60))
         self.retries_slider.set(server_config.get("retries", 0))
 
@@ -958,7 +949,6 @@ class InfiniteOracleGUI(tk.Tk):
         self.reverb_slider.config(state=tk.DISABLED)
         self.interval_entry.config(state=tk.DISABLED)
         self.variation_entry.config(state=tk.DISABLED)
-        self.request_interval_entry.config(state=tk.DISABLED)
         self.filter_entry.config(state=tk.DISABLED)
         self.timeout_slider.config(state=tk.DISABLED)
         self.retries_slider.config(state=tk.DISABLED)
@@ -988,7 +978,6 @@ class InfiniteOracleGUI(tk.Tk):
             self.reverb_slider.config(state=tk.NORMAL)
             self.interval_entry.config(state=tk.NORMAL)
             self.variation_entry.config(state=tk.NORMAL)
-            self.request_interval_entry.config(state=tk.NORMAL)
             self.filter_entry.config(state=tk.NORMAL)
             self.timeout_slider.config(state=tk.NORMAL)
             self.retries_slider.config(state=tk.NORMAL)
@@ -1026,13 +1015,13 @@ class InfiniteOracleGUI(tk.Tk):
             try:
                 interval = float(self.interval_entry.get())
                 variation = float(self.variation_entry.get())
-                request_interval = float(self.request_interval_entry.get())
+                request_interval = max(1.0, interval - (variation / 2))  # Calculate dynamically, min 1.0
                 if server_type == "Ollama":
                     num_ctx = int(self.num_ctx_entry.get())
                 else:
                     max_tokens = int(self.max_tokens_entry.get())
             except ValueError:
-                messagebox.showerror("Input Error", "Interval, Variation, Request Interval, and Context Size/Max Tokens must be numeric.")
+                messagebox.showerror("Input Error", "Interval, Variation, and Context Size/Max Tokens must be numeric.")
                 self.start_lock = False
                 self.after(0, self.enable_send_and_start)
                 return
@@ -1062,7 +1051,7 @@ class InfiniteOracleGUI(tk.Tk):
             logger.debug("Starting threads with audio_queue size: %d", self.audio_queue.qsize())
             self.generator_thread = threading.Thread(
                 target=generate_wisdom,
-                args=(self, self.wisdom_queue, model, lambda: self.server_type_var.get(), self.stop_event, lambda: float(self.request_interval_entry.get()), SYSTEM_PROMPT),
+                args=(self, self.wisdom_queue, model, lambda: self.server_type_var.get(), self.stop_event, lambda: request_interval, SYSTEM_PROMPT),
                 daemon=True
             )
             self.tts_thread = threading.Thread(
@@ -1149,7 +1138,6 @@ class InfiniteOracleGUI(tk.Tk):
                 self.reverb_slider.config(state=tk.NORMAL)
                 self.interval_entry.config(state=tk.NORMAL)
                 self.variation_entry.config(state=tk.NORMAL)
-                self.request_interval_entry.config(state=tk.NORMAL)
                 self.filter_entry.config(state=tk.NORMAL)
                 self.timeout_slider.config(state=tk.NORMAL)
                 self.retries_slider.config(state=tk.NORMAL)
