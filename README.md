@@ -17,7 +17,7 @@ Below are step-by-step instructions for setting up each component.
 ## Step 1: Download infinite_oracle.zip
 
 1. Download the latest `infinite_oracle.zip` (~3 GB) from the following Google Drive link:
-   - **[Download Infinite Oracle](https://drive.google.com/file/d/1Tf_A8J9BmAkf8wgbs-AGSDqc4uMeAKLr/view?usp=sharing)**
+   - **[Download Infinite Oracle](https://drive.google.com/file/d/1iXlOgtk0zgIKFPmUnfs5rKsdtU99tbL6/view?usp=sharing)**
 2. Once downloaded, extract the ZIP file to a folder on your computer.
 
 ---
