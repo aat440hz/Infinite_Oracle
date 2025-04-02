@@ -122,7 +122,16 @@ def generate_wisdom(gui, wisdom_queue, model, get_server_type_func, stop_event, 
         with history_lock:
             if not gui.remember_var.get():
                 conversation_history = []
+            # Truncate history based on context size for Ollama
+            if server_type == "Ollama":
+                max_ctx = int(gui.num_ctx_entry.get())
+                # Estimate tokens roughly (1 word ≈ 1 token)
+                total_tokens = sum(len(msg["content"].split()) for msg in conversation_history)
+                while total_tokens > max_ctx and conversation_history:
+                    removed = conversation_history.pop(0)
+                    total_tokens -= len(removed["content"].split())
             messages = [{"role": "system", "content": system_prompt}] + conversation_history + [{"role": "user", "content": system_prompt}]
+        
         payload = {
             "model": model,
             "messages": messages,
@@ -149,10 +158,11 @@ def generate_wisdom(gui, wisdom_queue, model, get_server_type_func, stop_event, 
                     if gui.remember_var.get():
                         conversation_history.append({"role": "user", "content": system_prompt})
                         conversation_history.append({"role": "assistant", "content": filtered_wisdom})
+                        # Keep history within reasonable bounds (e.g., 100 entries)
                         if len(conversation_history) > 100:
                             conversation_history = conversation_history[-100:]
                 try:
-                    wisdom_queue.put_nowait(filtered_wisdom)  # Non-blocking
+                    wisdom_queue.put_nowait(filtered_wisdom)
                     logger.debug("Added filtered wisdom to queue: %s", filtered_wisdom)
                 except queue.Full:
                     logger.warning("Wisdom queue full, skipping: %s", filtered_wisdom)
@@ -1075,7 +1085,6 @@ class InfiniteOracleGUI(tk.Tk):
 
     def stop_oracle(self):
         def stop_thread():
-            global conversation_history
             if self.is_running:
                 self.is_running = False
                 self.stop_event.set()
@@ -1117,8 +1126,7 @@ class InfiniteOracleGUI(tk.Tk):
                     self.session.close()
                     self.session = None
 
-                with history_lock:
-                    conversation_history = []
+                # Removed: with history_lock: conversation_history = []
 
                 self.start_button.config(state=tk.NORMAL)
                 self.send_button.config(state=tk.NORMAL)
@@ -1143,9 +1151,9 @@ class InfiniteOracleGUI(tk.Tk):
                 self.retries_slider.config(state=tk.NORMAL)
                 server_type = self.server_type_var.get()
                 self.max_tokens_entry.config(state=tk.NORMAL if server_type != "Ollama" else tk.DISABLED, 
-                                             bg="white" if server_type != "Ollama" else "grey")
+                                            bg="white" if server_type != "Ollama" else "grey")
                 self.num_ctx_entry.config(state=tk.NORMAL if server_type == "Ollama" else tk.DISABLED,
-                                          bg="white" if server_type == "Ollama" else "grey")
+                                        bg="white" if server_type == "Ollama" else "grey")
                 self.start_lock = False
                 self.send_enabled = True
                 self.after(100, self.enable_send_and_start)
